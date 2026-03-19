@@ -17,14 +17,38 @@ if (!API_KEY) {
   process.exit(1);
 }
 
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+});
 const prompt = (q: string): Promise<string> =>
   new Promise((resolve) => rl.question(q, resolve));
+
+async function chat(userMessage: string) {
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: userMessage }] }],
+        generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
+      }),
+    },
+  );
+  const json = await res.json();
+  return json.candidates[0].content.parts[0].text;
+}
 
 async function main() {
   while (true) {
     const input = await prompt("> ");
-    // TODO: send to LLM API and print response
+    if (input === "exit" || input === "quit") {
+      rl.close();
+      break;
+    }
+    const output = await chat(input);
+    console.log(output);
   }
 }
 
