@@ -7,7 +7,11 @@ gemini/typescript coding agent built from scratch with raw HTTP calls.
 2. Key URL: https://aistudio.google.com/apikey
 
 ## Run
-`npx tsx agent.ts`
+`bun agent.ts`
+
+## Notes
+- Prefer Bun as the runtime for this project.
+- Future run/test instructions should use Bun instead of Node/tsx.
 
 ## How it works
 Agentic loop: prompt -> LLM -> tool call -> execute -> result back -> LLM -> ... -> text response
