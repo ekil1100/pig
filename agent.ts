@@ -1,55 +1,84 @@
-import * as readline from "node:readline";
-import { readFileSync } from "node:fs";
+const systemPrompt = `Your name is Pig, a coding assistant. You have access to tools for working with code and the filesystem under ${Bun.cwd}. Use tools proactively when they would help. For example, inspect the project before asking the user for file paths. Prefer taking action over asking unnecessary questions.`;
 
-// Load .env file
-const env = readFileSync(".env", "utf-8");
-for (const line of env.split("\n")) {
-  const [key, ...vals] = line.split("=");
-  if (key?.trim() && vals.length) {
-    const v = vals.join("=").trim();
-    if (v && !v.startsWith("#")) process.env[key.trim()] = v;
+async function loadEnv() {
+  const envFile = Bun.file(".env");
+  if (!(await envFile.exists())) return;
+
+  const env = await envFile.text();
+  for (const rawLine of env.split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+
+    const [key, ...vals] = line.split("=");
+    if (!key?.trim() || vals.length === 0) continue;
+
+    Bun.env[key.trim()] = vals.join("=").trim();
   }
 }
 
-const API_KEY = process.env.GEMINI_API_KEY;
-if (!API_KEY) {
-  console.error("Missing GEMINI_API_KEY in .env file");
-  process.exit(1);
-}
+async function chat(ctx: []) {
+  const apiKey = Bun.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("Missing GEMINI_API_KEY in .env file");
+  }
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
-const prompt = (q: string): Promise<string> =>
-  new Promise((resolve) => rl.question(q, resolve));
-
-async function chat(userMessage: string) {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`,
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: userMessage }] }],
+        systemInstruction: {
+          parts: [{ text: systemPrompt }],
+        },
+        contents: ctx,
         generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
       }),
     },
   );
-  const json = await res.json();
-  return json.candidates[0].content.parts[0].text;
+
+  if (!response.ok) {
+    throw new Error(
+      `Gemini API error ${response.status}: ${await response.text()}`,
+    );
+  }
+
+  const json = await response.json();
+  const res = json?.candidates?.[0]?.content;
+  ctx.push(res);
+
+  return res?.parts?.[0]?.text;
 }
 
 async function main() {
+  await loadEnv();
+
+  if (!Bun.env.GEMINI_API_KEY) {
+    console.error("Missing GEMINI_API_KEY in .env file");
+    return;
+  }
+
+  const ctx = [];
+
   while (true) {
-    const input = await prompt("> ");
-    if (input === "exit" || input === "quit") {
-      rl.close();
-      break;
+    const input = prompt(">");
+    if (input === null) break;
+
+    const trimmed = input.trim();
+    if (trimmed === "exit" || trimmed === "quit") break;
+    if (!trimmed) continue;
+
+    ctx.push({ role: "user", parts: [{ text: trimmed }] });
+
+    try {
+      const output = await chat(ctx);
+      console.log(output);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
     }
-    const output = await chat(input);
-    console.log(output);
   }
 }
 
-main().catch(console.error);
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+});
