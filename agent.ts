@@ -32,6 +32,26 @@ async function chat(ctx: []) {
           parts: [{ text: systemPrompt }],
         },
         contents: ctx,
+        tools: [
+          {
+            functionDeclarations: [
+              {
+                name: "list_files",
+                description: "List files and directories at the given path",
+                parameters: {
+                  type: "object",
+                  properties: {
+                    directory: {
+                      type: "string",
+                      description: "Directory path to list",
+                    },
+                  },
+                  required: ["directory"],
+                },
+              },
+            ],
+          },
+        ],
         generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
       }),
     },
@@ -46,7 +66,16 @@ async function chat(ctx: []) {
   const json = await response.json();
   const res = json?.candidates?.[0]?.content;
   ctx.push(res);
-
+  if (res?.parts) {
+    for (let part of res.parts) {
+      if (part.functionCall) {
+        const functionCall = part.functionCall;
+        const name = functionCall.name;
+        const args = functionCall.args;
+        return `${name} ${JSON.stringify(args)}`;
+      }
+    }
+  }
   return res?.parts?.[0]?.text;
 }
 
