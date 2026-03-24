@@ -18,6 +18,33 @@ async function loadEnv() {
   }
 }
 
+function call(name: string) {
+  switch (name) {
+    case "list_files":
+      return async (args: { directory: string }) => {
+        try {
+          const files = await readdir(args.directory);
+          const filesStr = files.join("\n");
+          return filesStr;
+        } catch (err) {
+          return err.message;
+        }
+      };
+    case "read_file":
+      return async (args: { path: string }) => {
+        try {
+          const file = Bun.file(args.path);
+          if (!(await file.exists())) return "file not found";
+          return await file.text();
+        } catch (err) {
+          return err.message;
+        }
+      };
+    default:
+      return async () => "function not found";
+  }
+}
+
 async function chat(ctx: []) {
   const apiKey = Bun.env.GEMINI_API_KEY;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
@@ -31,16 +58,30 @@ async function chat(ctx: []) {
         functionDeclarations: [
           {
             name: "list_files",
-            description: "List files and directories at the given path",
+            description: "list files and directories at the given path",
             parameters: {
               type: "object",
               properties: {
                 directory: {
                   type: "string",
-                  description: "Directory path to list",
+                  description: "directory path to list",
                 },
               },
               required: ["directory"],
+            },
+          },
+          {
+            name: "read_file",
+            description: "read the contents of a file at the given path",
+            parameters: {
+              type: "object",
+              properties: {
+                path: {
+                  type: "string",
+                  description: "file path to read",
+                },
+              },
+              required: ["path"],
             },
           },
         ],
@@ -63,7 +104,9 @@ async function chat(ctx: []) {
     }
 
     const json = await response.json();
-    const res = json?.candidates?.[0]?.content;
+    const res: {
+      parts?: { text?: string; functionCall?: { name: string; args: {} } }[];
+    } = json.candidates[0].content;
     ctx.push(res);
     if (!res?.parts) return "no response";
     let hasFunctionCall = false;
@@ -73,23 +116,22 @@ async function chat(ctx: []) {
       const functionCall = part.functionCall;
       const name = functionCall.name;
       const args = functionCall.args;
-      const files = await readdir(args.directory);
-      const filesStr = files.join("\n");
+      const result = await call(name)(args);
       ctx.push({
         role: "function",
         parts: [
           {
             functionResponse: {
-              name: "list_files",
+              name,
               response: {
-                name: "list_files",
-                content: filesStr,
+                name,
+                content: result,
               },
             },
           },
         ],
       });
-      console.log(`${name} ${JSON.stringify(args)}\nfiles:\n${filesStr}`);
+      console.log(`${name}${JSON.stringify(args)}\n\n${result}`);
     }
     if (hasFunctionCall) continue;
     return res?.parts?.[0]?.text;
