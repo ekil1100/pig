@@ -1,4 +1,5 @@
 import { readdir } from "fs/promises";
+import { $ } from "bun";
 
 const systemPrompt = `Your name is Pig, a coding assistant. You have access to tools for working with code and the filesystem under ${Bun.cwd}. Use tools proactively when they would help. For example, inspect the project before asking the user for file paths. Prefer taking action over asking unnecessary questions.`;
 
@@ -27,6 +28,7 @@ function call(name: string) {
           const filesStr = files.join("\n");
           return filesStr;
         } catch (err) {
+          if (!(err instanceof Error)) return "unknow error";
           return err.message;
         }
       };
@@ -37,6 +39,20 @@ function call(name: string) {
           if (!(await file.exists())) return "file not found";
           return await file.text();
         } catch (err) {
+          if (!(err instanceof Error)) return "unknow error";
+          return err.message;
+        }
+      };
+    case "run_bash":
+      return async (args: { command: string }) => {
+        try {
+          const result = await $`${args.command}`;
+          const stdout = result.text();
+          const stderr = result.stderr?.toString();
+          const exitCode = result.exitCode;
+          return exitCode ? stdout : stderr;
+        } catch (err) {
+          if (!(err instanceof Error)) return "unknow error";
           return err.message;
         }
       };
@@ -82,6 +98,20 @@ async function chat(ctx: []) {
                 },
               },
               required: ["path"],
+            },
+          },
+          {
+            name: "run_bash",
+            description: "execute a bash command and return its output",
+            parameters: {
+              type: "object",
+              properties: {
+                command: {
+                  type: "string",
+                  description: "command to run",
+                },
+              },
+              required: ["command"],
             },
           },
         ],
