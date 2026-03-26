@@ -1,5 +1,4 @@
 import { readdir } from "fs/promises";
-import { $ } from "bun";
 
 const systemPrompt = `Your name is Pig, a coding assistant. You have access to tools for working with code and the filesystem under ${Bun.cwd}. Use tools proactively when they would help. For example, inspect the project before asking the user for file paths. Prefer taking action over asking unnecessary questions.`;
 
@@ -46,11 +45,13 @@ function call(name: string) {
     case "run_bash":
       return async (args: { command: string }) => {
         try {
-          const result = await $`${args.command}`;
-          const stdout = result.text();
-          const stderr = result.stderr?.toString();
-          const exitCode = result.exitCode;
-          return exitCode ? stdout : stderr;
+          const { stdout, stderr, exitCode } = Bun.spawnSync(
+            ["bash", "-lc", args.command],
+            { timeout: 30000 },
+          );
+          if (exitCode != 0)
+            return exitCode + ": " + stdout.toString() + stderr.toString();
+          return stdout.toString() + stderr.toString();
         } catch (err) {
           if (!(err instanceof Error)) return "unknow error";
           return err.message;
