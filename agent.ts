@@ -57,6 +57,42 @@ function call(name: string) {
           return err.message;
         }
       };
+    case "edit_file":
+      return async (args: {
+        path: string;
+        old_string: string;
+        new_string: string;
+      }) => {
+        try {
+          const file = Bun.file(args.path);
+          if (args.old_string === "") {
+            if (!(await file.exists())) {
+              await file.write(args.new_string);
+              return `create file: ${args.path}`;
+            }
+            const writer = file.writer();
+            await writer.write(args.new_string);
+            await writer.end();
+            return `append to file: ${args.path}`;
+          }
+          if (!(await file.exists())) {
+            return `error: file not found`;
+          }
+          const content = await file.text();
+          const splits = content.split(args.old_string);
+          if (splits.length === 1) {
+            return `error: old string is not found`;
+          } else if (splits.length === 2) {
+            await file.write(splits.join(args.new_string));
+            return `update file: ${args.path}`;
+          } else {
+            return `error: old sring appears multiple times`;
+          }
+        } catch (err) {
+          if (!(err instanceof Error)) return "unknow error";
+          return err.message;
+        }
+      };
     default:
       return async () => "function not found";
   }
@@ -113,6 +149,29 @@ async function chat(ctx: []) {
                 },
               },
               required: ["command"],
+            },
+          },
+          {
+            name: "edit_file",
+            description:
+              "edit a file by replacing a specific string with new content. can alse create new file.",
+            parameters: {
+              type: "object",
+              properties: {
+                path: {
+                  type: "string",
+                  description: "file path to edit",
+                },
+                old_string: {
+                  type: "string",
+                  description: "old string",
+                },
+                new_string: {
+                  type: "string",
+                  description: "new string",
+                },
+              },
+              required: ["path", "old_string", "new_string"],
             },
           },
         ],
