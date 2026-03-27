@@ -1,6 +1,28 @@
 import { readdir } from "fs/promises";
 
-const systemPrompt = `Your name is Pig, a coding assistant. You have access to tools for working with code and the filesystem under ${Bun.cwd}. Use tools proactively when they would help. For example, inspect the project before asking the user for file paths. Prefer taking action over asking unnecessary questions.`;
+type FunctionCall = {
+  name: string;
+  args: Record<string, unknown>;
+};
+
+type ResponsePart = {
+  text?: string;
+  functionCall?: FunctionCall;
+};
+
+type CtxMessage = {
+  role: string;
+  parts: Array<{
+    text?: string;
+    functionCall?: FunctionCall;
+    functionResponse?: {
+      name: string;
+      response: { name: string; content: string };
+    };
+  }>;
+};
+
+const systemPrompt = `Your name is Pig, a coding assistant. You have access to tools for working with code and the filesystem under ${process.cwd()}. Use tools proactively when they would help. For example, inspect the project before asking the user for file paths. Prefer taking action over asking unnecessary questions.`;
 
 async function loadEnv() {
   const envFile = Bun.file(".env");
@@ -47,7 +69,7 @@ function call(name: string) {
         try {
           const { stdout, stderr, exitCode } = Bun.spawnSync(
             ["bash", "-lc", args.command],
-            { timeout: 30000 },
+            { timeout: 30000, stdout: "pipe", stderr: "pipe" },
           );
           if (exitCode != 0)
             return exitCode + ": " + stdout.toString() + stderr.toString();
@@ -98,7 +120,7 @@ function call(name: string) {
   }
 }
 
-async function chat(ctx: []) {
+async function chat(ctx: CtxMessage[]) {
   const apiKey = Bun.env.GEMINI_API_KEY;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
   const body = {
@@ -194,19 +216,17 @@ async function chat(ctx: []) {
     }
 
     const json = await response.json();
-    const res: {
-      parts?: { text?: string; functionCall?: { name: string; args: {} } }[];
-    } = json.candidates[0].content;
-    ctx.push(res);
+    const res: { parts?: ResponsePart[] } = json.candidates[0].content;
+    ctx.push(json.candidates[0].content);
     if (!res?.parts) return "no response";
     let hasFunctionCall = false;
-    for (let part of res.parts) {
+    for (const part of res.parts) {
       if (!part.functionCall) continue;
       hasFunctionCall = true;
       const functionCall = part.functionCall;
       const name = functionCall.name;
       const args = functionCall.args;
-      const result = await call(name)(args);
+      const result = await call(name)(args as never);
       ctx.push({
         role: "function",
         parts: [
@@ -236,7 +256,7 @@ async function main() {
     return;
   }
 
-  const ctx = [];
+  const ctx: CtxMessage[] = [];
 
   while (true) {
     const input = prompt(">");
