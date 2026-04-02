@@ -5,142 +5,67 @@
 
 ---
 
-## 1. 先给结论
+## 1. 总体判断
 
-如果你要用 **Zig** 来实现 Pi，我建议采用下面的总体策略：
+**Zig 很适合实现 Pi 的核心闭环，但不适合第一阶段复刻整个 pi-mono 生态。**
 
-### 1.1 总体方向
-
-**用 Zig 实现 Pi 的核心闭环非常合适，尤其适合这些部分：**
-
+### 1.1 适合用 Zig 做的部分
 - CLI 与命令分发
 - LLM provider 抽象层
 - agent loop
 - session / JSONL / branch tree
 - 文件工具与 bash 工具
 - TUI
-- RPC / JSON mode
+- JSON mode / RPC mode
 - 配置与资源发现
 
-**但不建议一开始就用 Zig 硬啃这些部分：**
-
+### 1.2 不适合第一阶段硬做的部分
 - 浏览器 UI（`pi-web-ui`）
-- npm 生态兼容扩展系统（TS 动态扩展）
-- Slack bot 的高层生态适配
-- 复杂 OAuth Web 登录全家桶
+- TS/npm 风格动态扩展系统
+- Slack bot 高层适配
+- 复杂 OAuth 浏览器登录流程
 
-### 1.2 最佳路线
+### 1.3 一句话目标
+把目标收敛为：
 
-把 Pi 拆成两层：
-
-1. **Zig 核心运行时**
-   - provider
-   - agent
-   - session
-   - tools
-   - TUI
-   - RPC
-
-2. **外围适配层**
-   - Web UI 后续用前端做，走 RPC
-   - 扩展优先用“外部进程插件协议”而不是 TS 动态加载
-   - skills / prompts / themes 先做成纯数据驱动
-
-### 1.3 方案关键词
-
-- **单仓但模块化，不必 monorepo 起手**
-- **先实现 Pi 核心，不急着复刻 pi-mono 全生态**
-- **避免把 TS extension 机制直接照搬到 Zig**
-- **优先用 JSON/JSONL + 外部进程协议 代替嵌入式脚本运行时**
-- **先做 pure Zig MVP，再决定是否引入 C 依赖（如 curl）**
+> 用 Zig 实现一个 Pi Core：一个可扩展的终端编码代理运行时和 CLI 产品。
 
 ---
 
-## 2. 为什么 Zig 适合做 Pi
+## 2. 第一阶段实现边界
 
-## 2.1 适合的点
+第一阶段只覆盖 Pi 的核心四层：
 
-### A. CLI/TUI 很强
-Pi 的主入口就是终端，Zig 很适合做：
+- `pi-ai` 等价物：provider 与统一流式事件
+- `pi-agent-core` 等价物：agent loop 与工具执行
+- `pi-coding-agent` 等价物：CLI、session、modes、资源加载
+- `pi-tui` 等价物：交互式终端界面
 
-- 原始终端输入处理
-- ANSI 输出控制
-- 高性能增量渲染
-- 单文件分发 / 静态链接 / 低依赖部署
-
-### B. 文件和进程控制能力强
-Pi 的默认工具本质是：
-
-- 读文件
-- 写文件
-- 编辑文件
-- 执行 shell
-
-这类能力是 Zig 的强项。
-
-### C. 内存和数据结构可控
-Pi 有大量：
-
-- 流式事件
-- JSONL session
-- 长上下文消息
-- 大文本工具输出
-- 增量 parser
-
-用 Zig 可以更清楚地控制：
-
-- 分配器
-- 生命周期
-- 截断策略
-- 缓冲区复用
-
-### D. 二进制分发体验好
-Pi 是终端产品，Zig 编译出的单二进制对用户非常友好。
-
----
-
-## 2.2 不适合硬做的点
-
-### A. 动态扩展系统不如 TS 自然
-`pi-mono` 里的 extension 是 TypeScript 模块，天然适合：
-
-- 动态加载
-- npm 依赖
-- UI 自由度
-- 第三方扩展生态
-
-Zig 要完全照搬这一套，成本很高。
-
-### B. Web 生态不是 Zig 的主场
-`pi-web-ui` 本质是前端组件库，这块不应强行 Zig 化。
-
-### C. OAuth / 浏览器登录流程会比 TS 更麻烦
-不是不能做，但不应该是 Zig 版 Pi 的第一优先级。
-
----
-
-## 3. 你的实现目标应该怎么收敛
-
-如果目标是：
-
-> “我想从 0 用 Zig 做一个 Pi”
-
-我建议你把目标改写成：
-
-> “用 Zig 实现一个 Pi Core：一个可扩展的终端编码代理运行时和 CLI 产品。”
-
-即第一阶段聚焦：
-
-- `pi-ai` 等价物
-- `pi-agent-core` 等价物
-- `pi-coding-agent` 等价物
-- `pi-tui` 等价物
-
-而不是一开始就覆盖：
+明确不纳入第一阶段：
 
 - `pi-web-ui`
 - `pi-mom`
 - `pi-pods`
+
+这样可以先做出一个真正可用的 Zig 版 Pi，而不是过早扩张范围。
+
+---
+
+## 3. 实现策略
+
+### 3.1 架构策略
+- **单仓但模块化**，先不要做 monorepo
+- **先实现 Pi Core**，不急着复刻全生态
+- **优先 pure Zig MVP**，必要时再引入 C 依赖（如 curl）
+
+### 3.2 扩展策略
+- 不照搬 TS extension 机制
+- 优先采用 **外部进程插件协议**
+- `skills / prompts / themes` 先保持数据驱动
+
+### 3.3 协议策略
+- 配置、会话、RPC、事件流统一使用 **JSON / JSONL**
+- 避免自定义二进制协议或嵌入式脚本运行时
 
 ---
 
@@ -955,6 +880,9 @@ P1：
 ## 14. Zig 版扩展机制怎么做
 
 这是 Zig 方案里最需要重新设计的部分。
+
+补充调研见：`docs/pi-zig-plugin-compatibility-research.md`
+
 
 ## 14.1 不建议复刻 TS 动态模块加载
 
