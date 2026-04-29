@@ -1,0 +1,3 @@
+event: error
+data: {"error":{"type":"invalid_request_error","message":"bad request"}}
+

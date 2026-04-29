@@ -1,6 +1,6 @@
 # Pig Error Model
 
-M0 defines shared error categories before adding behavior-heavy subsystems.
+Pig uses stable error categories so CLI output, provider events, and future session logs can stay structured.
 
 ## Categories
 
@@ -16,17 +16,29 @@ M0 defines shared error categories before adding behavior-heavy subsystems.
 - `PluginError`: external plugin host or protocol failures.
 - `InternalError`: invariant violations and bugs.
 
+M1 provider code also exposes provider-local categories in `ProviderErrorKind`: `auth`, `provider`, `stream_parse`, `transport`, `rate_limit`, and `internal`.
+
 ## Exit Codes
 
 - `0`: success.
-- `1`: environment, path, or runtime failure.
+- `1`: environment, path, provider, or runtime failure.
 - `2`: CLI usage or argument error.
-- `70`: internal bug. M0 reserves this code for later use.
+- `70`: internal bug. Reserved for later use.
+
+## Provider Error Semantics
+
+Provider parsers distinguish:
+
+1. Local allocation/I/O failure: returned as a Zig error.
+2. Provider/API error response: emitted as `ProviderEvent.error_event`; no `done`.
+3. Fatal malformed stream: emitted as `ProviderEvent.error_event`, then returns `StreamParseError`; no `done`.
+
+`done` means successful provider stream completion only.
 
 ## User-Fixable Errors
 
-Config, auth, path, tool permission, and resource errors should be presented with direct remediation text. Provider and stream parse errors may be user-fixable if caused by model/provider configuration.
+Config, auth, path, and resource errors should include remediation text. Provider auth errors should name the missing environment variable without echoing secrets. Stream parse errors are usually not user-fixable unless caused by an incompatible custom provider endpoint.
 
-## Events and Retry
+## Retry
 
-From M1 onward, provider, tool, session, RPC, and plugin errors should be representable as structured events. Network/provider failures may be retryable. CLI usage errors, invalid configs, malformed tool calls, and internal invariant failures are not automatically retryable.
+Network/provider failures and rate limits may be retryable. Auth errors, malformed streams, invalid configs, malformed tool-call JSON, and internal invariant failures are not automatically retryable.

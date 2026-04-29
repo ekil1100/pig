@@ -1,0 +1,18 @@
+event: message_start
+data: {"message":{"id":"msg_1","role":"assistant","usage":{"input_tokens":4,"output_tokens":0}}}
+
+event: content_block_start
+data: {"index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"index":0,"delta":{"type":"text_delta","text":"hello"}}
+
+event: content_block_stop
+data: {"index":0}
+
+event: message_delta
+data: {"usage":{"output_tokens":2}}
+
+event: message_stop
+data: {}
+

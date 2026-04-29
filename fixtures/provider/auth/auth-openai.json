@@ -1,0 +1,10 @@
+{
+  "providers": {
+    "openai_compatible": {
+      "api_key": "test-openai-key"
+    },
+    "anthropic": {
+      "api_key": "test-anthropic-key"
+    }
+  }
+}

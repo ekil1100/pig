@@ -1,0 +1,6 @@
+{
+  "openai_compatible": {
+    "base_url": "https://example.invalid/v1",
+    "model": "test-model"
+  }
+}
