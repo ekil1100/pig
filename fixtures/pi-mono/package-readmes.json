@@ -1,0 +1,8 @@
+{
+  "readmes": [
+    { "package": "ai", "summary": "Provider abstraction and streaming events." },
+    { "package": "agent", "summary": "Agent runtime and session orchestration." },
+    { "package": "coding-agent", "summary": "Local coding-agent CLI product surface." },
+    { "package": "tui", "summary": "Terminal UI primitives and renderer." }
+  ]
+}

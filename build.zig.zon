@@ -1,0 +1,16 @@
+.{
+    .fingerprint = 0xcc599557f77cf582,
+    .name = .pig,
+    .version = "1.0.0-m0",
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "test",
+        "docs",
+        "fixtures",
+        "README.md",
+    },
+}

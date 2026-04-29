@@ -2,3 +2,5 @@ node_modules/
 .env
 .build-agent-progress
 *.log
+.zig-cache/
+zig-out/

@@ -1,78 +1,86 @@
 # Pig
 
-A demo coding agent built from scratch with raw HTTP calls to the Gemini API.
+Pig is a local coding-agent project. The current repository keeps the original Bun/TypeScript teaching demo and now also contains the Pig v1.0 Zig implementation skeleton.
 
-> This project is a learning/demo implementation, not a production-ready agent. It is intentionally small and straightforward so the core agent loop is easy to understand.
+## Current Tracks
 
-No SDKs, no frameworks — just:
-- a chat loop
-- conversation history
-- a system prompt
-- tool declarations
-- a tool execution loop
+### Bun/TypeScript Demo
 
-## Features
+The demo agent is a small learning implementation using raw Gemini HTTP calls.
 
-Pig can:
-- list files with `list_files`
-- read files with `read_file`
-- run shell commands with `run_bash`
-- edit files with `edit_file`
-
-## Requirements
-
-- [Bun](https://bun.sh/)
-- A Gemini API key: https://aistudio.google.com/apikey
-
-## Setup
-
-1. Add your key to `.env`:
-
-```env
-GEMINI_API_KEY=your-api-key-here
-```
-
-2. Install dependencies:
+Run it with:
 
 ```bash
 bun install
-```
-
-## Run
-
-```bash
 bun agent.ts
 ```
 
-Then chat with Pig in the terminal.
+It supports the teaching/demo tools in `agent.ts`:
 
-## Example prompts
+- `list_files`
+- `read_file`
+- `run_bash`
+- `edit_file`
 
-- `What files are in this project?`
-- `Read agent.ts`
-- `Run git status`
-- `Create a file called notes.txt with hello inside`
-- `Replace foo with bar in notes.txt`
+### Zig v1.0 M0 Skeleton
 
-## Project structure
+M0 establishes the Zig 0.16 engineering foundation. It intentionally does not implement real provider calls, the agent loop, coding tools, session persistence, or a TUI.
 
-- `agent.ts` — main agent implementation
-- `.env` — API key (gitignored)
-- `AGENTS.md` — project notes
+Available M0 commands:
 
-## How it works
+```bash
+zig build run -- --version
+zig build run -- --help
+zig build run -- doctor
+zig build run -- paths
+```
 
-Pig runs an agent loop:
+## Zig Requirements
 
-1. Read user input
-2. Send conversation history to Gemini
-3. Detect tool calls
-4. Execute tools locally
-5. Send tool results back to Gemini
-6. Repeat until Gemini returns text
+- Zig 0.16.x
+- No third-party Zig dependencies in M0
+
+Check your version:
+
+```bash
+zig version
+```
+
+## Zig Build and Test
+
+```bash
+zig build
+zig build test
+zig build smoke
+zig build fmt-check
+```
+
+## M0 Project Structure
+
+- `build.zig` / `build.zig.zon` — Zig 0.16 build configuration
+- `src/main.zig` — Zig CLI entry point
+- `src/app` — CLI dispatch and build info
+- `src/core` — shared errors and ID placeholders
+- `src/provider` — provider placeholders
+- `src/tools` — tool risk/access placeholders
+- `src/session` — session path placeholders
+- `src/resources` — resource placeholders
+- `src/tui` — terminal capability placeholders
+- `src/rpc` / `src/plugin` — protocol version placeholders
+- `src/util` — path and testing helpers
+- `test` — M0 unit/fixture tests
+- `fixtures` — small offline fixtures
+- `docs` — M0 architecture, error, fixture, and allocator notes
+
+## Documentation
+
+- `docs/architecture.md`
+- `docs/error-model.md`
+- `docs/fixtures.md`
+- `docs/allocator-policy.md`
 
 ## Notes
 
-- Built with Bun + TypeScript
-- Uses the Gemini `generateContent` HTTP API directly
-- Tool results are returned to Gemini with `role: "function"`
+- `.env` is local-only and gitignored.
+- M0 tests are offline and do not require API keys.
+- Agent functionality starts in later milestones.

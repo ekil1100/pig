@@ -1,0 +1,2 @@
+{"command":"pig --version","expect":"version build info"}
+{"command":"pig doctor","expect":"local diagnostics only"}

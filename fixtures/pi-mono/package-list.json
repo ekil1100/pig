@@ -1,0 +1,11 @@
+{
+  "packages": [
+    "ai",
+    "agent",
+    "coding-agent",
+    "tui",
+    "web-ui",
+    "mom",
+    "pods"
+  ]
+}
