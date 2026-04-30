@@ -26,7 +26,7 @@ M0 不做：
 
 ## 2. 目录结构
 
-建议在新的 Zig 实现仓库中使用以下结构。如果当前项目仍是 Bun/TypeScript demo，可以把 Zig 实现放在独立目录，例如 `zig/` 或新仓库；如果决定替换当前 Pig，则直接放在 repo root。
+当前 Pig v1.0 Zig 实现位于 repo root。不要再创建 `zig/` 子目录，也不要恢复旧的 demo 入口。
 
 ```text
 .
@@ -105,7 +105,7 @@ smoke         运行不依赖网络、不依赖 API key 的 smoke tests
 fmt-check     检查 Zig 格式
 ```
 
-主二进制名称固定为 `pig`。后续不使用 `pig-zig` 作为临时名称；如果需要区分 TypeScript demo，通过源码目录、构建 profile 或文档说明区分。
+主二进制名称固定为 `pig`。后续不使用 `pig-zig` 作为临时名称；Zig 实现是 repo root 的唯一当前实现。
 
 ### 3.2 `build.zig.zon`
 

@@ -33,7 +33,7 @@ M1 不做：
 
 ## 2. 当前基础
 
-M0 已经在当前 repo root 提交，commit 为 `3772d3a feat: add zig m0 foundation`。本计划默认 Pig v1.0 Zig 实现直接位于 repo root，与 Bun/TypeScript demo 并存；不要再创建 `zig/` 子目录，也不要把 M1 写到旧 `agent.ts` demo 中。
+M0 已经在当前 repo root 提交，commit 为 `3772d3a feat: add zig m0 foundation`。Pig v1.0 Zig 实现直接位于 repo root；不要再创建 `zig/` 子目录，也不要恢复旧的 demo 入口。
 
 M0 已经提供：
 

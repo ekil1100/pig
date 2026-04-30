@@ -1,28 +1,6 @@
 # Pig
 
-Pig is a local coding-agent project. The current repository keeps the original Bun/TypeScript teaching demo and also contains the Pig v1.0 Zig implementation.
-
-## Current Tracks
-
-### Bun/TypeScript Demo
-
-The demo agent is a small learning implementation using raw Gemini HTTP calls.
-
-Run it with:
-
-```bash
-bun install
-bun agent.ts
-```
-
-It supports the teaching/demo tools in `agent.ts`:
-
-- `list_files`
-- `read_file`
-- `run_bash`
-- `edit_file`
-
-### Zig v1.0
+Pig is a local-first coding-agent project implemented in Zig.
 
 The Zig implementation targets Zig 0.16.x.
 
