@@ -1,11 +1,11 @@
 # Pig v1.0 Architecture
 
-Pig v1.0 is a Zig 0.16 local-first coding-agent implementation. M0 established the skeleton; M1 adds the provider layer while still avoiding agent runtime, tools, session persistence, and TUI coupling.
+Pig v1.0 is a Zig 0.16 local-first coding-agent implementation. M0 established the skeleton; M1 added the provider layer; M2 adds a reusable agent runtime while still avoiding real coding tools, session persistence, product CLI modes, and TUI coupling.
 
 ## Modules
 
 - `app`: CLI dispatch, build info, diagnostics, path output.
-- `core`: shared error categories and ID placeholders; future agent runtime.
+- `core`: shared errors/IDs and `core.agent`, the M2 reusable runtime, event bus, state, model-client, tool, middleware, and test harness contracts.
 - `provider`: message/content models, provider events, SSE parsing, auth resolution, request building, and provider-specific recorded parsers.
 - `tools`: tool risk and access classifications.
 - `session`: session path placeholder API.
@@ -28,10 +28,10 @@ tools -> util
 session -> util
 ```
 
-Provider modules must not depend on `app` or `tui`. Provider parsers emit `ProviderEvent` through `EventSink`; M2 will consume those events without parsing provider-specific SSE/JSON.
+Provider modules must not depend on `app` or `tui`. Provider parsers emit `ProviderEvent` through `EventSink`; `core.agent` consumes those events without parsing provider-specific SSE/JSON.
 
 ## M0 to M2 Evolution
 
 - M0: compileable skeleton, local diagnostics, fixtures, docs, tests.
 - M1: provider message/content models, unified streaming events, SSE parser, auth resolver, OpenAI-compatible recorded parser, Anthropic recorded parser, provider fixtures, and optional live smoke harness.
-- M2: reusable agent runtime and event bus, still independent of terminal rendering.
+- M2: reusable agent runtime and event bus, scripted model client, fake tool harness, middleware hooks, cooperative abort, and offline agent fixtures; still independent of terminal rendering.

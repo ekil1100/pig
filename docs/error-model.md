@@ -18,6 +18,8 @@ Pig uses stable error categories so CLI output, provider events, and future sess
 
 M1 provider code also exposes provider-local categories in `ProviderErrorKind`: `auth`, `provider`, `stream_parse`, `transport`, `rate_limit`, and `internal`.
 
+M2 agent runtime exposes `AgentRunError`: `ProviderFailed`, `ProviderStreamParseFailed`, `ToolNotFound`, `ToolFailed`, `MiddlewareRejected`, `MaxIterationsExceeded`, `Aborted`, `SinkRejectedEvent`, and `OutOfMemory`.
+
 ## Exit Codes
 
 - `0`: success.
@@ -33,7 +35,17 @@ Provider parsers distinguish:
 2. Provider/API error response: emitted as `ProviderEvent.error_event`; no `done`.
 3. Fatal malformed stream: emitted as `ProviderEvent.error_event`, then returns `StreamParseError`; no `done`.
 
-`done` means successful provider stream completion only.
+`done` means successful provider stream completion only. M2 records provider `done` as a diagnostic flag but does not require it after `ModelClient.streamTurn()` returns success; provider parsers remain responsible for transport-specific completeness checks.
+
+## Agent Runtime Error Semantics
+
+After `agent_start` and `turn_start`, runtime failures emit `error_event` when appropriate, then `turn_end(failed)` and `agent_end(failed)`. Abort emits `abort`, then `turn_end(aborted)` and `agent_end(aborted)` after a turn has started.
+
+If `before_input` rejects, no run has started: no user message and no lifecycle events are emitted.
+
+If a provider already emitted `provider.error_event`, runtime maps it to one `AgentEvent.error_event` and does not synthesize a duplicate generic provider error for the same failure.
+
+Tool execution is sequential. Missing tools, executor failures, and max-iteration protection fail the turn. Middleware rejection after a tool result still deinitializes the owned tool result.
 
 ## User-Fixable Errors
 

@@ -5,8 +5,9 @@ Fixtures are intentionally small and offline-only. They provide stable input for
 ## Directories
 
 - `fixtures/pi-mono`: compact metadata derived from the reference product boundary.
-- `fixtures/fake-provider`: small JSONL provider-event samples reserved for M2 tests.
+- `fixtures/fake-provider`: small JSONL provider-event samples reserved for early M2 tests.
 - `fixtures/provider`: M1 recorded/hand-written provider SSE, response-error, auth, and config fixtures.
+- `fixtures/agent`: M2 offline agent runtime JSONL examples for no-tool and tool-call turns.
 
 ## Rules
 
@@ -33,3 +34,11 @@ Fixtures are intentionally small and offline-only. They provide stable input for
 - `fixtures/pi-mono/package-readmes.json`
 - `fixtures/pi-mono/cli-samples.jsonl`
 - `fixtures/fake-provider/empty-turn.jsonl`
+
+## M2 Agent Fixture Files
+
+- `fixtures/agent/README.md`: fixture rules.
+- `fixtures/agent/no-tool-turn.jsonl`: fake provider events for one text-only turn.
+- `fixtures/agent/tool-call-turn.jsonl`: fake provider/tool events for one tool-call continuation turn.
+
+M2 fixture tests validate JSONL shape only. They do not execute tools, call providers, read auth files, or access the network.

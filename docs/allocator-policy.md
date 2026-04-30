@@ -27,6 +27,15 @@ Pig v1.0 is local-first CLI software. Allocation ownership is explicit so provid
 - `OwnedMessage` and `OwnedContentBlock` own duplicated content and must be deinitialized.
 - `MessageView` and `ContentBlockView` are borrowed and must not free caller-owned slices.
 
+## M2 Agent Runtime Policy
+
+- `AgentState` owns conversation history as `provider.OwnedMessage` values and frees them in `AgentState.deinit()`.
+- `StreamAccumulator` owns in-progress text, thinking text/signature bytes, and pending tool-call strings.
+- `MessageViewBatch` owns only temporary message/content view slices for one provider request; payload strings remain owned by `AgentState`.
+- `AgentEvent` payloads are callback-scoped. Retaining sinks must clone payloads.
+- `ToolExecutionResult` owns `tool_call_id` and `content_json`; runtime clones them into `AgentState` before deinitializing the result.
+- Middleware hooks receive borrowed callback-scoped payloads and must clone anything they retain.
+
 ## Later Milestones
 
 - Session indexes should have explicit init/deinit ownership.

@@ -54,10 +54,19 @@ pub fn build(b: *std.Build) void {
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/provider_openai.zig");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/provider_anthropic.zig");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/provider_live.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/agent_state.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/agent_events.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/agent_runtime_text.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/agent_runtime_tools.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/agent_middleware.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/agent_fixtures.zig");
 
     const provider_fixtures_step = b.step("provider-fixtures", "Run offline provider recorded fixture tests");
     _ = addPigTest(b, provider_fixtures_step, pig_module, target, optimize, "test/provider_openai.zig");
     _ = addPigTest(b, provider_fixtures_step, pig_module, target, optimize, "test/provider_anthropic.zig");
+
+    const agent_fixtures_step = b.step("agent-fixtures", "Run offline agent runtime fixture tests");
+    _ = addPigTest(b, agent_fixtures_step, pig_module, target, optimize, "test/agent_fixtures.zig");
 
     const live_module = b.createModule(.{
         .root_source_file = b.path("src/provider/live_smoke.zig"),

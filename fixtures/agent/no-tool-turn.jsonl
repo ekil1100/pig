@@ -1,0 +1,4 @@
+{"kind":"provider_event","event":"message_start","role":"assistant"}
+{"kind":"provider_event","event":"text_delta","text":"hello"}
+{"kind":"provider_event","event":"message_end"}
+{"kind":"provider_event","event":"done"}

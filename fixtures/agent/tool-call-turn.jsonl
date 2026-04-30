@@ -1,0 +1,12 @@
+{"kind":"provider_event","event":"message_start","role":"assistant"}
+{"kind":"provider_event","event":"tool_call_start","index":0,"id":"call_1","name":"echo"}
+{"kind":"provider_event","event":"tool_call_delta","index":0,"arguments_json_delta":"{\"text\":\"ping\"}"}
+{"kind":"provider_event","event":"tool_call_end","index":0,"id":"call_1","name":"echo","arguments_json":"{\"text\":\"ping\"}"}
+{"kind":"provider_event","event":"message_delta","stop_reason":"tool_calls"}
+{"kind":"provider_event","event":"message_end"}
+{"kind":"provider_event","event":"done"}
+{"kind":"tool_result","event":"tool_execution_end","id":"call_1","name":"echo","content_json":"{\"text\":\"ping\"}"}
+{"kind":"provider_event","event":"message_start","role":"assistant"}
+{"kind":"provider_event","event":"text_delta","text":"pong"}
+{"kind":"provider_event","event":"message_end"}
+{"kind":"provider_event","event":"done"}

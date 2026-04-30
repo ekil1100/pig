@@ -4,7 +4,7 @@ Pig is a local-first coding-agent project implemented in Zig.
 
 The Zig implementation targets Zig 0.16.x.
 
-M0 established the engineering foundation and CLI diagnostics. M1 adds the provider layer foundation: provider message/content types, unified streaming events, SSE parsing, OpenAI-compatible recorded parser, Anthropic recorded parser, provider auth resolution, and optional live smoke harness.
+M0 established the engineering foundation and CLI diagnostics. M1 added the provider layer foundation: provider message/content types, unified streaming events, SSE parsing, OpenAI-compatible recorded parser, Anthropic recorded parser, provider auth resolution, and optional live smoke harness. M2 adds the reusable core agent runtime: state ownership, turn loop, provider-event bridge, fake tool-call loop, agent events, middleware hooks, cooperative abort, and offline agent fixtures.
 
 Available local commands:
 
@@ -35,6 +35,7 @@ zig build
 zig build test
 zig build smoke
 zig build provider-fixtures
+zig build agent-fixtures
 zig build provider-live
 zig build fmt-check
 ```
@@ -56,7 +57,7 @@ API keys must come from the environment and must not be committed.
 - `build.zig` / `build.zig.zon` — Zig 0.16 build configuration
 - `src/main.zig` — Zig CLI entry point
 - `src/app` — CLI dispatch and build info
-- `src/core` — shared errors and ID placeholders
+- `src/core` — shared errors, ID placeholders, and M2 `core.agent` runtime
 - `src/provider` — M1 provider models, events, SSE parsing, auth, transport, recorded parsers
 - `src/tools` — tool risk/access placeholders
 - `src/session` — session path placeholders
@@ -64,7 +65,7 @@ API keys must come from the environment and must not be committed.
 - `src/tui` — terminal capability placeholders
 - `src/rpc` / `src/plugin` — protocol version placeholders
 - `src/util` — path and testing helpers
-- `test` — unit, fixture, and provider tests
+- `test` — unit, fixture, provider, and agent runtime tests
 - `fixtures` — small offline fixtures
 - `docs` — architecture, error, fixture, allocator, and provider notes
 
@@ -82,4 +83,5 @@ API keys must come from the environment and must not be committed.
 
 - `.env` is local-only and gitignored.
 - Default tests are offline and do not require API keys.
-- Agent runtime, coding tools, sessions, and product CLI modes start in later milestones.
+- M2 agent runtime is available as a reusable core module and is tested with scripted providers/fake tools.
+- Real coding tools, sessions, and product CLI modes start in later milestones.
