@@ -31,7 +31,7 @@ M2 不做：
 - 不实现 compaction/tree navigation；M4/M8 负责。
 - 不接入 live provider by default；M2 tests must stay offline。
 
-Roadmap note: M2 acceptance says “Print mode can complete a no-tool prompt.” This plan satisfies that behavior through the core `AgentRuntime` no-tool turn tests and the offline `agent-fixtures` harness. The user-facing product CLI flag `pig --print` remains M5 so M2 does not prematurely design CLI modes, JSON output, session selection, or real provider configuration.
+Roadmap note: M2 acceptance says “Print mode can complete a no-tool prompt.” For M2, interpret this as: core `AgentRuntime` can complete a no-tool prompt through a scripted model client, verified by runtime tests and the offline `agent-fixtures` harness. The user-facing product CLI flag `pig --print` remains M5 so M2 does not prematurely design CLI modes, JSON output, session selection, or real provider configuration.
 
 ## 2. 当前基础
 
@@ -167,15 +167,15 @@ pub const AgentRunError = error{
 错误语义：
 
 1. Provider malformed stream：emit `AgentEvent.error_event` 后返回 `ProviderStreamParseFailed`。
-2. Provider API error event：emit mapped `AgentEvent.error_event`，按 fatal provider failure 结束 turn。
+2. Provider API error event：emit mapped `AgentEvent.error_event`，按 fatal provider failure 结束 turn。如果当前 provider iteration 已经观察并映射过 `provider.error_event`，runtime 不要再为同一次 `ModelClient` failure 合成第二个 generic provider error。
 3. Missing tool：emit `tool_execution_end` with error result or `error_event`，append tool error result if safe, then continue only if configured; M2 default should return `ToolNotFound` after emitting error。
 4. Tool executor returns error：emit tool end/error and append error tool result only if executor produced a result; otherwise return `ToolFailed`。
-5. Abort requested：emit `abort` and return `Aborted` without further provider/tool calls。
+5. Abort requested：emit `abort` and return `Aborted` without further provider/tool calls。M2 abort is cooperative, not preemptive: runtime checks it at phase boundaries and inside the provider event bridge, but it cannot interrupt a blocking model client or blocking tool executor unless that implementation cooperates。
 6. Infinite tool loop protection：after `max_iterations`, emit error and return `MaxIterationsExceeded`。
 
 ### 4.3.1 Failure finalization rule
 
-After `agent_start` and `turn_start` have both been emitted, every terminal path must emit exactly one `turn_end(status)` and exactly one `agent_end(status)`, unless emitting to the event sink itself fails.
+`AgentRuntime.runUserText()` represents one bounded agent run for one user turn. It always emits `agent_start` after `before_input` succeeds, even when the same `AgentState` already contains prior conversation history. This keeps lifecycle events paired for repeated calls on the same state. After `agent_start` and `turn_start` have both been emitted, every terminal path must emit exactly one `turn_end(status)` and exactly one `agent_end(status)`, unless emitting to the event sink itself fails.
 
 Status mapping:
 
@@ -191,7 +191,7 @@ abort requested               -> aborted
 
 Special cases:
 
-- If `before_input` rejects before `turn_start`, no user message is appended and no `turn_end` is emitted. If `agent_start` was emitted before the rejection, emit `agent_end(failed)`.
+- If `before_input` rejects, no user message is appended and no `agent_start`, `turn_start`, `turn_end`, or `agent_end` is emitted. Runtime returns `MiddlewareRejected`; M2 does not emit an `error_event` for this pre-run rejection because no agent run has started yet.
 - If `before_provider_request`, `before_tool_call`, or `after_tool_result` rejects after `turn_start`, emit `error_event`, then `turn_end(failed)`, then `agent_end(failed)`.
 - If event sink emission fails, runtime returns `SinkRejectedEvent`; no further lifecycle events are guaranteed because the sink is unavailable.
 - Failure finalization should be centralized in a small helper in `runtime.zig` so success, failure, and abort paths cannot drift.
@@ -205,7 +205,22 @@ AgentState.messages: ArrayList(provider.OwnedMessage)
 AgentState.deinit() frees all owned messages.
 ```
 
-For provider request calls, runtime builds a temporary borrowed slice of `provider.MessageView` pointing into owned state. Do not store borrowed views after the provider call returns.
+For provider request calls, runtime builds temporary borrowed `provider.MessageView` values pointing into owned state. Because `provider.MessageView.content` is a `[]ContentBlockView`, runtime must also allocate per-message borrowed content view slices; it is not enough to allocate only the outer message slice. Do not store borrowed views after the provider call returns.
+
+Suggested helper shape:
+
+```zig
+pub const MessageViewBatch = struct {
+    messages: []provider.MessageView,
+    content_views: [][]provider.ContentBlockView,
+
+    pub fn deinit(self: *MessageViewBatch, allocator: std.mem.Allocator) void { ... }
+};
+
+pub fn messageViews(self: *AgentState, allocator: std.mem.Allocator) !MessageViewBatch;
+```
+
+Caller owns the `MessageViewBatch` allocations and must call `deinit`; message/content payload strings remain owned by `AgentState`.
 
 ### 4.5 Tool-call boundaries
 
@@ -228,7 +243,11 @@ M2 does not:
 - Preview file edits.
 - Run tools in parallel.
 
-`appendAssistantFromStream()` ownership rule: it clones accumulated text and completed tool calls into an owned assistant message, but it must not clear `state.stream`. The runtime reads `state.stream.tool_calls` after appending the assistant message in order to execute tools. The stream accumulator is cleared only at the beginning of the next provider iteration.
+`appendAssistantFromStream()` ownership rule: it clones accumulated text, thinking blocks, and completed tool calls into an owned assistant message, but it must not clear `state.stream`. The runtime reads `state.stream.tool_calls` after appending the assistant message in order to execute tools. The stream accumulator is cleared only at the beginning of the next provider iteration.
+
+Thinking rule: M2 keeps `ThinkingLevel` in the request contract and supports `provider.thinking_delta` by accumulating both thinking text and `signature_delta` bytes into assistant `provider.ThinkingBlock` content. If no signature bytes were observed, the resulting `ThinkingBlock.signature` is `null`. Tests should cover at least one thinking-delta path so thinking content is not silently dropped.
+
+Tool-call argument rule: `provider.tool_call_end.arguments_json` is canonical in M2. `provider.tool_call_delta.arguments_json_delta` may be accumulated for diagnostics or future fallback, but runtime must not concatenate deltas and then also append the final full `arguments_json` as if it were another delta.
 
 ### 4.6 Iteration model
 
@@ -249,6 +268,8 @@ predictable event order
 ```
 
 If assistant returns no tool calls, turn ends immediately.
+
+Provider `done` rule: M2 scripted fixtures should include `provider.done`, and the bridge records whether it was seen for tests/diagnostics. Runtime does not require `done` if `ModelClient.streamTurn()` returns success; transport/parser-specific stream completeness remains the provider layer's responsibility.
 
 ## 5. Agent state model
 
@@ -291,11 +312,21 @@ pub const PendingToolCall = struct {
 
 pub const StreamAccumulator = struct {
     text: std.ArrayList(u8),
+    thinking: std.ArrayList(u8),
+    thinking_signature: std.ArrayList(u8),
     tool_calls: std.ArrayList(PendingToolCall),
+    saw_done: bool = false,
     usage: provider.Usage,
 
     pub fn resetRetainingCapacity(self: *StreamAccumulator, allocator: std.mem.Allocator) void { ... }
     pub fn deinit(self: *StreamAccumulator, allocator: std.mem.Allocator) void { ... }
+};
+
+pub const MessageViewBatch = struct {
+    messages: []provider.MessageView,
+    content_views: [][]provider.ContentBlockView,
+
+    pub fn deinit(self: *MessageViewBatch, allocator: std.mem.Allocator) void { ... }
 };
 
 pub const AgentState = struct {
@@ -311,11 +342,11 @@ pub const AgentState = struct {
     pub fn appendUserText(self: *AgentState, text: []const u8) !void { ... }
     pub fn appendAssistantFromStream(self: *AgentState) !void { ... }
     pub fn appendToolResult(self: *AgentState, result: ToolExecutionResult) !void { ... }
-    pub fn messageViews(self: *AgentState, allocator: std.mem.Allocator) ![]provider.MessageView { ... }
+    pub fn messageViews(self: *AgentState, allocator: std.mem.Allocator) !MessageViewBatch { ... }
 };
 ```
 
-Important implementation detail: `messageViews()` returns an allocated slice of borrowed views. Caller owns only the view slice and must free it; message/content payloads remain owned by `AgentState`.
+Important implementation detail: `messageViews()` returns a `MessageViewBatch`. Caller owns the batch allocations and must call `deinit`; message/content payload strings remain owned by `AgentState`.
 
 ## 6. Agent event model
 
@@ -366,11 +397,12 @@ M2 should map provider events as follows:
 ```text
 provider.message_start       -> agent.message_start(role=assistant)
 provider.text_delta          -> agent.message_delta(text_delta=...)
+provider.thinking_delta      -> accumulate assistant thinking content; no public event in M2
 provider.message_delta       -> agent.message_delta(stop_reason=...)
 provider.message_end         -> agent.message_end(role=assistant)
-provider.tool_call_start     -> no public tool execution event yet; accumulate pending call
-provider.tool_call_delta     -> accumulate pending call argument bytes if needed
-provider.tool_call_end       -> add PendingToolCall
+provider.tool_call_start     -> no public tool execution event yet; track pending call index/id/name
+provider.tool_call_delta     -> optional diagnostic/fallback accumulation only
+provider.tool_call_end       -> add PendingToolCall using canonical id/name/arguments_json
 provider.usage               -> keep in accumulator; optional event can be deferred
 provider.error_event         -> agent.error_event
 provider.done                -> marks provider iteration complete
@@ -432,14 +464,15 @@ Optional fixture-backed variant can read `fixtures/agent/*.jsonl`, but M2 can st
 `src/core/agent/tool.zig` should define fake-tool-ready interfaces, not real coding tools.
 
 ```zig
-pub const ToolRisk = enum { read_only, writes_files, runs_commands, external_side_effect };
-
 pub const ToolSpec = struct {
     name: []const u8,
     description: []const u8,
-    risk: ToolRisk = .read_only,
 };
+```
 
+M2 intentionally does not define another tool risk enum. The repository already has `src/tools.ToolRisk` / `src/tools.ToolAccess`; M3 will map real coding tools and approval policy there. M2 fake tools only need name/description plus the executor contract.
+
+```zig
 pub const ToolCall = struct {
     id: []const u8,
     name: []const u8,
@@ -463,11 +496,17 @@ pub const ToolExecutorError = error{
     ToolFailed,
 };
 
+pub const ToolExecutionContext = struct {
+    allocator: std.mem.Allocator,
+    event_sink: events.AgentEventSink,
+    abort_flag: ?*const bool = null,
+};
+
 pub const ToolExecutor = struct {
     ptr: *anyopaque,
-    execute_fn: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator, call: ToolCall, event_sink: events.AgentEventSink) ToolExecutorError!ToolExecutionResult,
+    execute_fn: *const fn (ptr: *anyopaque, context: ToolExecutionContext, call: ToolCall) ToolExecutorError!ToolExecutionResult,
 
-    pub fn execute(self: ToolExecutor, allocator: std.mem.Allocator, call: ToolCall, event_sink: events.AgentEventSink) ToolExecutorError!ToolExecutionResult { ... }
+    pub fn execute(self: ToolExecutor, context: ToolExecutionContext, call: ToolCall) ToolExecutorError!ToolExecutionResult { ... }
 };
 
 pub const ToolRegistration = struct {
@@ -518,7 +557,7 @@ pub const MiddlewareHooks = struct {
 };
 ```
 
-M2 should support one hooks struct. Do not implement middleware chains/plugin loading yet.
+M2 should support one hooks struct. Do not implement middleware chains/plugin loading yet. Middleware hook payloads are callback-scoped borrowed views; if a hook needs to retain input, request, call, or result payloads, it must clone them before returning.
 
 ## 10. Runtime algorithm
 
@@ -544,22 +583,23 @@ Algorithm:
 runUserText(text):
   if abort requested -> emit abort, return Aborted
   hooks.before_input(text)
-  emit agent_start if state was idle
+  emit agent_start
   emit turn_start(text)
   state.appendUserText(text)
 
   iteration = 0
   while iteration < max_iterations:
-    if abort requested -> emit abort, return Aborted
+    if abort requested -> emit abort, finalize aborted, return Aborted
     iteration += 1
     state.stream.resetRetainingCapacity()
 
-    views = state.messageViews()
-    defer free views
-    request = ModelRequest{ messages = views, system_prompt = config.system_prompt, thinking_level = config.thinking_level }
+    batch = state.messageViews()
+    defer batch.deinit(allocator)
+    request = ModelRequest{ messages = batch.messages, system_prompt = config.system_prompt, thinking_level = config.thinking_level }
     hooks.before_provider_request(request)
 
     bridge provider events into state.stream + AgentEventSink
+    // The bridge checks abort between provider events and records whether provider.error_event/done were seen.
     model.streamTurn(request, provider_bridge_sink)
 
     state.appendAssistantFromStream()
@@ -572,13 +612,17 @@ runUserText(text):
 
     state.status = executing_tools
     for each pending tool call in index order:
+      if abort requested -> emit abort, finalize aborted, return Aborted
       hooks.before_tool_call(call)
       registration = tools.find(call.name) orelse fail ToolNotFound
       emit tool_execution_start
-      result = registration.executor.execute(...)
-      emit tool_execution_end
-      hooks.after_tool_result(result)
-      state.appendToolResult(result)
+      {
+        result = registration.executor.execute(ToolExecutionContext{ allocator, event_sink, abort_flag }, call)
+        defer result.deinit(allocator)
+        emit tool_execution_end
+        hooks.after_tool_result(result)
+        state.appendToolResult(result)
+      }
 
   emit error_event(MaxIterationsExceeded)
   state.status = failed
@@ -605,6 +649,7 @@ Event ordering guarantee for one tool-call turn:
 agent_start
 turn_start
 message_start
+message_delta*
 message_end
 /tool accumulation happens from provider events/
 tool_execution_start
@@ -653,11 +698,13 @@ Test cases:
 - `AgentState.init` starts idle with empty messages.
 - `appendUserText` appends owned user message.
 - `appendAssistantFromStream` turns accumulated text into assistant message.
+- `appendAssistantFromStream` includes accumulated thinking text/signature bytes as an assistant `thinking` content block.
 - `appendAssistantFromStream` includes completed tool calls as assistant tool-call content blocks.
 - `appendToolResult` appends tool role message with `tool_result` block.
-- `messageViews` returns borrowed views that reflect owned state.
+- `messageViews` returns a `MessageViewBatch` with borrowed views that reflect owned state, including multiple messages and multiple content blocks per message.
+- `MessageViewBatch.deinit` frees outer message/content view allocations without freeing state-owned payload strings.
 - `AgentState.deinit` has no leaks under `std.testing.allocator`.
-- Allocation failure cleanup with `std.testing.checkAllAllocationFailures` for user/assistant/tool result append paths.
+- Allocation failure cleanup with `std.testing.checkAllAllocationFailures` for user/assistant/thinking/tool result append paths.
 
 ### 12.2 `test/agent_events.zig`
 
@@ -666,7 +713,9 @@ Test cases:
 - Agent event collector clones callback-scoped payloads.
 - Event collector deinit frees all retained strings.
 - Provider text events map to message start/delta/end.
+- Provider thinking events accumulate into assistant thinking content according to the M2 thinking rule.
 - Provider error event maps to agent error event without provider-specific raw JSON.
+- Provider error event plus `ModelClient` failure does not duplicate the same generic agent error.
 - Sink rejection stops runtime with `SinkRejectedEvent`.
 
 ### 12.3 `test/agent_runtime_text.zig`
@@ -689,6 +738,7 @@ Assert:
 - Assistant text is `hello world`.
 - Event order matches no-tool turn guarantee.
 - Model client saw the user message in request views.
+- Reusing the same `AgentState` for a second `runUserText()` emits a fresh paired `agent_start`/`agent_end`, preserves prior messages, and sends prior assistant history in the second model request.
 
 ### 12.4 `test/agent_runtime_tools.zig`
 
@@ -735,6 +785,7 @@ Error tests:
 
 - Missing tool returns `ToolNotFound` and emits `error_event`, `turn_end(failed)`, and `agent_end(failed)`.
 - Tool executor failure returns `ToolFailed` and emits tool/error events, `turn_end(failed)`, and `agent_end(failed)`.
+- `after_tool_result` middleware rejection after a successful tool execution deinitializes the owned `ToolExecutionResult` and emits failed lifecycle closure.
 - Infinite tool-call loop returns `MaxIterationsExceeded` after configured max and emits `turn_end(failed)` plus `agent_end(failed)`.
 - Provider failure returns `ProviderFailed` and emits `error_event`, `turn_end(failed)`, and `agent_end(failed)`.
 - Provider stream parse failure returns `ProviderStreamParseFailed` and emits `error_event`, `turn_end(failed)`, and `agent_end(failed)`.
@@ -753,10 +804,11 @@ after_tool_result
 before_provider_request
 ```
 
-- `before_input` rejection prevents user message append.
+- `before_input` rejection prevents user message append and emits no lifecycle events because no agent run has started yet.
 - `before_provider_request` rejection prevents provider call and emits failure lifecycle closure if `turn_start` was emitted.
 - `before_tool_call` rejection prevents tool execution and emits failure lifecycle closure.
 - Abort before or during a turn emits `abort`, `turn_end(aborted)` if the turn started, and `agent_end(aborted)` if the agent started.
+- Abort tests cover cooperative boundaries: before provider request, inside provider event bridge between events, and before each tool call. They do not require preempting a blocking model/tool implementation.
 - Reserved compaction/tree hooks are not called in M2.
 
 ### 12.6 `test/agent_fixtures.zig`
@@ -825,14 +877,30 @@ docs/fixtures.md
 
 Content requirements:
 
-- `docs/agent-runtime.md`：state model、turn loop、tool loop, scope boundaries, M2 fake tool limitation。
-- `docs/agent-events.md`：AgentEvent schema、ordering guarantees、provider event mapping、callback-scoped ownership。
-- `docs/error-model.md`：agent runtime errors、provider/tool/middleware/abort/max-iteration behavior。
-- `docs/allocator-policy.md`：AgentState owns messages; event payloads callback-scoped; test collectors clone。
+- `docs/agent-runtime.md`：state model、turn loop、tool loop, lifecycle pairing per `runUserText`, cooperative abort boundaries, scope boundaries, M2 fake tool limitation。
+- `docs/agent-events.md`：AgentEvent schema、ordering guarantees、provider event mapping including thinking accumulation, callback-scoped ownership。
+- `docs/error-model.md`：agent runtime errors、provider/tool/middleware/abort/max-iteration behavior, including provider-error deduplication。
+- `docs/allocator-policy.md`：AgentState owns messages; `MessageViewBatch` owns temporary view allocations; event payloads callback-scoped; test collectors clone。
 - `docs/fixtures.md`：agent fixture rules。
 - `README.md`：mention M2 adds core runtime and offline `agent-fixtures` step; product CLI modes still later。
 
 ## 15. Recommended task split
+
+### Task 0：Tighten runtime contracts before implementation
+
+**Files:**
+
+- Modify: `.agents/pig-v1.0-m2-implementation.md` if further clarifications are needed
+- No production source changes required
+
+Steps:
+
+- [ ] Confirm `messageViews()` returns `MessageViewBatch`, not only `[]provider.MessageView`.
+- [ ] Confirm `runUserText()` lifecycle semantics: each call emits a paired `agent_start`/`agent_end` while preserving conversation history in `AgentState`.
+- [ ] Confirm M2 does not define a duplicate tool risk enum; M3 will integrate with `src/tools.ToolRisk` / `src/tools.ToolAccess`.
+- [ ] Confirm M2 supports `provider.thinking_delta` by accumulating assistant thinking content.
+- [ ] Confirm abort is cooperative and only guaranteed at runtime/provider-event/tool boundaries.
+- [ ] Confirm `tool_call_end.arguments_json` is canonical and `provider.done` is diagnostic, not required for runtime success.
 
 ### Task 1：Agent state and message ownership
 
@@ -846,11 +914,11 @@ Content requirements:
 
 Steps:
 
-- [ ] Add failing tests for `AgentState.init/deinit`, `appendUserText`, `appendAssistantFromStream`, `appendToolResult`, `messageViews`.
+- [ ] Add failing tests for `AgentState.init/deinit`, `appendUserText`, `appendAssistantFromStream`, `appendToolResult`, `messageViews`, and `MessageViewBatch.deinit`.
 - [ ] Run `zig build test`; expected failure because `core.agent` does not exist.
-- [ ] Implement minimal `AgentState`, `ThinkingLevel`, `AgentStatus`, `StreamAccumulator`, `PendingToolCall`.
+- [ ] Implement minimal `AgentState`, `ThinkingLevel`, `AgentStatus`, `StreamAccumulator`, `PendingToolCall`, and `MessageViewBatch`.
 - [ ] Implement owned message append helpers using `provider.OwnedMessage.cloneFromView` or equivalent owned construction.
-- [ ] Add allocation-failure tests for append paths with `std.testing.checkAllAllocationFailures`.
+- [ ] Add allocation-failure tests for append paths and `messageViews()` with `std.testing.checkAllAllocationFailures`.
 - [ ] Run `zig build test` and `zig build fmt-check`.
 - [ ] Commit: `feat: add agent state model`.
 
@@ -892,24 +960,26 @@ Steps:
 - [ ] Run `zig build test` and `zig build fmt-check`.
 - [ ] Commit: `feat: add scripted model client`.
 
-### Task 4：Tool abstraction and fake tool registry
+### Task 4：Tool abstraction, middleware stub, and fake tool registry
 
 **Files:**
 
 - Create: `src/core/agent/tool.zig`
+- Create: `src/core/agent/middleware.zig`
 - Modify: `src/core/agent/testing.zig`
 - Create or update: `test/agent_runtime_tools.zig`
 - Modify: `src/core/agent/mod.zig`
 
 Steps:
 
-- [ ] Add failing tests for `ToolRegistry.find`, fake `EchoTool`, and deterministic result ownership.
-- [ ] Run `zig build test`; expected missing tool APIs.
-- [ ] Implement `ToolSpec`, `ToolCall`, `ToolExecutionResult`, `ToolExecutor`, `ToolRegistration`, `ToolRegistry`.
+- [ ] Add failing tests for `ToolRegistry.find`, fake `EchoTool`, deterministic result ownership, and default no-op `MiddlewareHooks` construction.
+- [ ] Run `zig build test`; expected missing tool/middleware APIs.
+- [ ] Implement `ToolSpec`, `ToolCall`, `ToolExecutionResult`, `ToolExecutionContext`, `ToolExecutor`, `ToolRegistration`, `ToolRegistry`.
+- [ ] Implement minimal `MiddlewareError` and `MiddlewareHooks` with nullable hooks and no runtime behavior yet, so `runtime.zig` can depend on the type in Task 5.
 - [ ] Implement fake `EchoTool` in testing module.
 - [ ] Ensure `ToolExecutionResult` ownership is clear and deinitialized by caller/runtime.
 - [ ] Run `zig build test` and `zig build fmt-check`.
-- [ ] Commit: `feat: add agent tool abstraction`.
+- [ ] Commit: `feat: add agent tool and middleware contracts`.
 
 ### Task 5：Core runtime no-tool loop
 
@@ -925,9 +995,9 @@ Steps:
 - [ ] Assert final state contains user + assistant messages and event order is deterministic.
 - [ ] Run `zig build test`; expected missing runtime.
 - [ ] Implement `AgentRuntime.runUserText` for no-tool path only.
-- [ ] Implement provider-event bridge for message_start/text_delta/message_delta/message_end/done/error_event.
+- [ ] Implement provider-event bridge for message_start/text_delta/thinking_delta/message_delta/message_end/done/error_event.
 - [ ] Map provider parse/provider failures to agent errors and event sink errors.
-- [ ] Add failure lifecycle tests for provider failure and provider stream parse failure: `error_event`, `turn_end(failed)`, `agent_end(failed)`.
+- [ ] Add failure lifecycle tests for provider failure and provider stream parse failure: `error_event`, `turn_end(failed)`, `agent_end(failed)`, without duplicating the same provider error when `provider.error_event` was already observed.
 - [ ] Implement centralized failure finalization helper for post-`turn_start` failures.
 - [ ] Run `zig build test` and `zig build fmt-check`.
 - [ ] Commit: `feat: add no-tool agent runtime loop`.
@@ -943,23 +1013,23 @@ Steps:
 Steps:
 
 - [ ] Add failing test for one tool-call iteration followed by final assistant text.
-- [ ] Add failing tests for missing tool, tool failure, and max iteration.
+- [ ] Add failing tests for missing tool, tool failure, tool result cleanup on middleware rejection, and max iteration.
 - [ ] Run `zig build test`; expected missing tool loop behavior.
-- [ ] Extend provider bridge to accumulate `tool_call_start/delta/end` into pending tool calls.
+- [ ] Extend provider bridge to accumulate `tool_call_start/delta/end` into pending tool calls, treating `tool_call_end.arguments_json` as canonical.
 - [ ] Append assistant tool-call message after provider iteration.
 - [ ] Execute tools sequentially by pending call index.
 - [ ] Emit `tool_execution_start` and `tool_execution_end` around executor call.
-- [ ] Append tool result messages, deinitialize owned `ToolExecutionResult`, and continue provider loop.
+- [ ] Append tool result messages, deinitialize owned `ToolExecutionResult` on both success and post-execution failure paths, and continue provider loop.
 - [ ] Enforce `max_iterations`.
 - [ ] Assert missing tool, tool failure, and max-iteration paths emit `turn_end(failed)` plus `agent_end(failed)`.
 - [ ] Run `zig build test` and `zig build fmt-check`.
 - [ ] Commit: `feat: add sequential agent tool loop`.
 
-### Task 7：Middleware hooks and abort handling
+### Task 7：Middleware behavior and abort handling
 
 **Files:**
 
-- Create: `src/core/agent/middleware.zig`
+- Update: `src/core/agent/middleware.zig`
 - Update: `src/core/agent/runtime.zig`
 - Create: `test/agent_middleware.zig`
 - Modify: `src/core/agent/mod.zig`
@@ -968,13 +1038,13 @@ Steps:
 
 - [ ] Add failing tests for hook order across input/provider/tool/result.
 - [ ] Add failing tests for hook rejection short-circuit behavior.
-- [ ] Add failing test for abort flag before provider/tool phases.
-- [ ] Run `zig build test`; expected missing middleware APIs.
-- [ ] Implement `MiddlewareHooks` and call hooks at the specified runtime points.
-- [ ] Map hook rejection to `MiddlewareRejected` and emit agent error event.
+- [ ] Add failing tests for cooperative abort boundaries before provider request, between provider events, and before tool calls.
+- [ ] Run `zig build test`; expected missing middleware behavior.
+- [ ] Wire `MiddlewareHooks` calls at the specified runtime points.
+- [ ] Map hook rejection to `MiddlewareRejected`; emit agent error event only after an agent run has started.
 - [ ] Implement simple abort flag checks and `AgentEvent.abort`.
 - [ ] Run `zig build test` and `zig build fmt-check`.
-- [ ] Commit: `feat: add agent middleware hooks`.
+- [ ] Commit: `feat: add agent middleware behavior`.
 
 ### Task 8：Agent fixtures build step and docs
 
@@ -1036,8 +1106,9 @@ M2 is done when:
 - `core.agent` exposes state, event, model client, tool, middleware, runtime modules.
 - Agent runtime can complete a no-tool user turn with a scripted provider.
 - Agent runtime can complete a tool-call turn with scripted provider + fake tool + continuation provider turn.
-- Agent runtime emits deterministic events for agent/turn/message/tool/error/abort transitions.
+- Agent runtime emits deterministic events for agent/turn/message/tool/error/abort transitions, with paired `agent_start`/`agent_end` for each `runUserText()` call.
 - Tool execution is sequential and predictable.
+- Runtime accumulates `provider.thinking_delta` into assistant thinking content.
 - Middleware hooks exist and are tested for order/rejection.
 - Runtime does not depend on app, TUI, session, resources, RPC, or plugin modules.
 - Runtime does not parse provider-specific SSE/JSON; it consumes M1 `ProviderEvent` only.
@@ -1047,7 +1118,9 @@ M2 is done when:
 
 ## 18. Main risks
 
-- If M2 stores borrowed `MessageView` payloads in state, later provider calls will use dangling memory. `AgentState` must own messages.
+- If M2 stores borrowed `MessageView` payloads in state, later provider calls will use dangling memory. `AgentState` must own messages and `MessageViewBatch` must own only temporary view allocations.
+- If `runUserText()` emits `agent_end` without a matching `agent_start` on repeated calls, downstream session/TUI consumers will see broken lifecycle pairs.
+- If runtime silently drops `provider.thinking_delta`, thinking-enabled providers will lose model output. Accumulate it into assistant thinking content or fail deterministically if this contract changes.
 - If runtime directly parses OpenAI/Anthropic JSON, provider/core layering is broken. Use only `provider.ProviderEvent`.
 - If real coding tools are added in M2, approval/preview/security scope will leak from M3 and delay runtime completion.
 - If product CLI flags are added in M2, M5 mode design may be prematurely constrained. Keep CLI changes to build/test docs only unless explicitly requested.
