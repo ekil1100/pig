@@ -4,6 +4,10 @@ const events = @import("events.zig");
 pub const ToolSpec = struct {
     name: []const u8,
     description: []const u8,
+    schema_json: []const u8 = "{}",
+    display_label: []const u8 = "",
+    risk_level: []const u8 = "safe",
+    access_kind: []const u8 = "read_only",
 };
 
 pub const ToolCall = struct {
@@ -53,5 +57,11 @@ pub const ToolRegistry = struct {
             if (std.mem.eql(u8, registration.spec.name, name)) return registration;
         }
         return null;
+    }
+
+    pub fn specs(self: ToolRegistry, allocator: std.mem.Allocator) ![]ToolSpec {
+        const out = try allocator.alloc(ToolSpec, self.registrations.len);
+        for (self.registrations, 0..) |registration, i| out[i] = registration.spec;
+        return out;
     }
 };

@@ -51,7 +51,9 @@ pub const AgentRuntime = struct {
 
             var batch = self.state.messageViews(self.allocator) catch |err| return self.failAfterTurn(turn_started, .failed, .internal, "failed to build message views", mapAlloc(err));
             defer batch.deinit(self.allocator);
-            const request = model_client.ModelRequest{ .messages = batch.messages, .system_prompt = self.state.config.system_prompt, .thinking_level = self.state.config.thinking_level };
+            const tool_specs = self.tools.specs(self.allocator) catch |err| return self.failAfterTurn(turn_started, .failed, .internal, "failed to build tool specs", mapAlloc(err));
+            defer self.allocator.free(tool_specs);
+            const request = model_client.ModelRequest{ .messages = batch.messages, .tools = tool_specs, .system_prompt = self.state.config.system_prompt, .thinking_level = self.state.config.thinking_level };
             self.hooks.callBeforeProviderRequest(request) catch |err| return self.failAfterTurn(turn_started, .failed, .middleware, "middleware rejected provider request", mapMiddlewareError(err));
 
             var bridge = ProviderBridge{ .runtime = self };

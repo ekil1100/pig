@@ -4,7 +4,7 @@ Pig is a local-first coding-agent project implemented in Zig.
 
 The Zig implementation targets Zig 0.16.x.
 
-M0 established the engineering foundation and CLI diagnostics. M1 added the provider layer foundation: provider message/content types, unified streaming events, SSE parsing, OpenAI-compatible recorded parser, Anthropic recorded parser, provider auth resolution, and optional live smoke harness. M2 adds the reusable core agent runtime: state ownership, turn loop, provider-event bridge, fake tool-call loop, agent events, middleware hooks, cooperative abort, and offline agent fixtures.
+M0 established the engineering foundation and CLI diagnostics. M1 added the provider layer foundation: provider message/content types, unified streaming events, SSE parsing, OpenAI-compatible recorded parser, Anthropic recorded parser, provider auth resolution, and optional live smoke harness. M2 added the reusable core agent runtime: state ownership, turn loop, provider-event bridge, fake tool-call loop, agent events, middleware hooks, cooperative abort, and offline agent fixtures. M3 adds built-in local coding tools: read, write, edit, bash, grep, find, and ls.
 
 Available local commands:
 
@@ -36,6 +36,7 @@ zig build test
 zig build smoke
 zig build provider-fixtures
 zig build agent-fixtures
+zig build tools-fixtures
 zig build provider-live
 zig build fmt-check
 ```
@@ -59,7 +60,7 @@ API keys must come from the environment and must not be committed.
 - `src/app` — CLI dispatch and build info
 - `src/core` — shared errors, ID placeholders, and M2 `core.agent` runtime
 - `src/provider` — M1 provider models, events, SSE parsing, auth, transport, recorded parsers
-- `src/tools` — tool risk/access placeholders
+- `src/tools` — M3 built-in coding tools, metadata, approval, path policy, and registry adapter
 - `src/session` — session path placeholders
 - `src/resources` — resource placeholders
 - `src/tui` — terminal capability placeholders
@@ -84,4 +85,5 @@ API keys must come from the environment and must not be committed.
 - `.env` is local-only and gitignored.
 - Default tests are offline and do not require API keys.
 - M2 agent runtime is available as a reusable core module and is tested with scripted providers/fake tools.
-- Real coding tools, sessions, and product CLI modes start in later milestones.
+- M3 built-in coding tools are available as reusable modules and through the M2 tool registry adapter.
+- Sessions and product CLI modes start in later milestones.

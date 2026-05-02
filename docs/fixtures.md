@@ -8,6 +8,7 @@ Fixtures are intentionally small and offline-only. They provide stable input for
 - `fixtures/fake-provider`: small JSONL provider-event samples reserved for early M2 tests.
 - `fixtures/provider`: M1 recorded/hand-written provider SSE, response-error, auth, and config fixtures.
 - `fixtures/agent`: M2 offline agent runtime JSONL examples for no-tool and tool-call turns.
+- `fixtures/tools`: M3 sample projects for built-in coding tool tests.
 
 ## Rules
 
@@ -42,3 +43,10 @@ Fixtures are intentionally small and offline-only. They provide stable input for
 - `fixtures/agent/tool-call-turn.jsonl`: fake provider/tool events for one tool-call continuation turn.
 
 M2 fixture tests validate JSONL shape only. They do not execute tools, call providers, read auth files, or access the network.
+
+## M3 Tool Fixture Files
+
+- `fixtures/tools/README.md`: tool fixture rules.
+- `fixtures/tools/sample-project`: small text project used by read/write/edit/search tests.
+
+M3 tests mutate only temp workspaces, not checked-in fixtures.

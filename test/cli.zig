@@ -38,7 +38,8 @@ test "cli dispatches version help paths doctor and unknown commands" {
     stdout.clearRetainingCapacity();
     stderr.clearRetainingCapacity();
     try std.testing.expectEqual(cli.ExitCode.ok, try cli.runWithContext(&.{"--help"}, context, &stdout.writer, &stderr.writer));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "agent functionality is not implemented") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "Pig v1.0 M3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "built-in coding tools") != null);
 
     stdout.clearRetainingCapacity();
     stderr.clearRetainingCapacity();

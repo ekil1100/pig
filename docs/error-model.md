@@ -47,6 +47,12 @@ If a provider already emitted `provider.error_event`, runtime maps it to one `Ag
 
 Tool execution is sequential. Missing tools, executor failures, and max-iteration protection fail the turn. Middleware rejection after a tool result still deinitializes the owned tool result.
 
+## Coding Tool Error Semantics
+
+M3 built-in coding tools return valid JSON for both success and expected tool errors. Recoverable tool errors use `ok:false` in `content_json` with `ToolExecutionResult.is_error=true` rather than throwing runtime `ToolFailed`.
+
+Examples include missing files, invalid edit text, approval denied, unsupported regex, path policy rejection, and bash timeout. Infrastructure failures such as allocation failure may still return Zig errors.
+
 ## User-Fixable Errors
 
 Config, auth, path, and resource errors should include remediation text. Provider auth errors should name the missing environment variable without echoing secrets. Stream parse errors are usually not user-fixable unless caused by an incompatible custom provider endpoint.

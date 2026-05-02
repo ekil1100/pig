@@ -36,6 +36,14 @@ Pig v1.0 is local-first CLI software. Allocation ownership is explicit so provid
 - `ToolExecutionResult` owns `tool_call_id` and `content_json`; runtime clones them into `AgentState` before deinitializing the result.
 - Middleware hooks receive borrowed callback-scoped payloads and must clone anything they retain.
 
+## M3 Coding Tools Policy
+
+- `ToolContext` borrows workspace/spill path strings from the caller and does not own them.
+- Tool result JSON slices are owned by `ToolResult` / `ToolExecutionResult` and must be deinitialized by the caller/runtime.
+- Approval preview JSON is temporary and callback-scoped unless a recording approval policy clones it.
+- Spill output files are owned by the workspace/session filesystem; result JSON may reference their paths.
+- Tests using `TempToolContext` must call `deinit()` to remove temp workspaces.
+
 ## Later Milestones
 
 - Session indexes should have explicit init/deinit ownership.
