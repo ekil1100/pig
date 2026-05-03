@@ -1,0 +1,4 @@
+{"schema":1,"id":"entry_root","session_id":"session_fixture_tool","parent_id":null,"kind":"header","created_ms":1,"cwd":"/workspace/pig","pig_version":"fixture"}
+{"schema":1,"id":"entry_user","session_id":"session_fixture_tool","parent_id":"entry_root","kind":"message","created_ms":2,"role":"user","content":[{"type":"text","text":"read README"}]}
+{"schema":1,"id":"entry_call","session_id":"session_fixture_tool","parent_id":"entry_user","kind":"tool_event","created_ms":3,"tool_call_id":"call_1","tool_name":"read","phase":"start"}
+{"schema":1,"id":"entry_result","session_id":"session_fixture_tool","parent_id":"entry_call","kind":"tool_result","created_ms":4,"tool_call_id":"call_1","is_error":false,"content_json":"{\"ok\":true}"}

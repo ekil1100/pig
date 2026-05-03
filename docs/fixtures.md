@@ -9,6 +9,7 @@ Fixtures are intentionally small and offline-only. They provide stable input for
 - `fixtures/provider`: M1 recorded/hand-written provider SSE, response-error, auth, and config fixtures.
 - `fixtures/agent`: M2 offline agent runtime JSONL examples for no-tool and tool-call turns.
 - `fixtures/tools`: M3 sample projects for built-in coding tool tests.
+- `fixtures/session`: M4 append-only session JSONL and recovery samples.
 
 ## Rules
 
@@ -50,3 +51,12 @@ M2 fixture tests validate JSONL shape only. They do not execute tools, call prov
 - `fixtures/tools/sample-project`: small text project used by read/write/edit/search tests.
 
 M3 tests mutate only temp workspaces, not checked-in fixtures.
+
+## M4 Session Fixture Files
+
+- `fixtures/session/simple-linear.jsonl`: header plus linear user/assistant messages.
+- `fixtures/session/tool-turn.jsonl`: tool event and canonical tool result entries.
+- `fixtures/session/branched.jsonl`: two children from one parent and current-leaf metadata.
+- `fixtures/session/partial-final-line.jsonl`: valid prefix followed by an invalid final partial line.
+
+M4 session fixtures are synthetic and must not contain real user sessions or machine-local secrets.

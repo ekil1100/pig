@@ -1,0 +1,5 @@
+{"schema":1,"id":"entry_root","session_id":"session_fixture_branch","parent_id":null,"kind":"header","created_ms":1,"cwd":"/workspace/pig","pig_version":"fixture"}
+{"schema":1,"id":"entry_user","session_id":"session_fixture_branch","parent_id":"entry_root","kind":"message","created_ms":2,"role":"user","content":[{"type":"text","text":"base"}]}
+{"schema":1,"id":"entry_left","session_id":"session_fixture_branch","parent_id":"entry_user","kind":"message","created_ms":3,"role":"assistant","content":[{"type":"text","text":"left"}]}
+{"schema":1,"id":"entry_right","session_id":"session_fixture_branch","parent_id":"entry_user","kind":"message","created_ms":4,"role":"assistant","content":[{"type":"text","text":"right"}]}
+{"schema":1,"id":"entry_info","session_id":"session_fixture_branch","parent_id":"entry_right","kind":"session_info","created_ms":5,"current_leaf_id":"entry_right"}

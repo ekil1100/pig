@@ -44,7 +44,7 @@ session -/-> app, tui, provider, provider parsers, tools implementation details
 
 M4 中 JSONL 文件是权威数据。任何 cache 都必须可以重建，不能成为正确性前提。
 
-当前 M3 代码里的 `src/util/paths.zig` 和 `src/session/mod.zig` 仍解析到 `.pi/agent/sessions`。M4 Slice 0 必须先迁移 path resolver：全局 config/auth/models/sessions 和 project resources 使用 `.pig` 命名空间，并更新 CLI diagnostics、路径测试和文档，避免 session store 继续写入 `.pi`。
+M4 Slice 0 需要迁移 path resolver：全局 config/auth/models/sessions 和 project resources 使用 `.pig` 命名空间，并更新 CLI diagnostics、路径测试和文档，避免 session store 写入旧 `.pi` 命名空间。当前实现已将 `src/util/paths.zig` 和 `src/session/mod.zig` 的默认路径迁到 `.pig`。
 
 Session ID 后续应尽量复用 `core.ids` 的方向；在该模块稳定前，可以先实现一个小型 session-local ID generator，并配套测试和 deterministic fixture 支持。
 

@@ -7,6 +7,10 @@ test "m0 fixtures exist and are readable" {
         "fixtures/pi-mono/package-readmes.json",
         "fixtures/pi-mono/cli-samples.jsonl",
         "fixtures/fake-provider/empty-turn.jsonl",
+        "fixtures/session/simple-linear.jsonl",
+        "fixtures/session/tool-turn.jsonl",
+        "fixtures/session/branched.jsonl",
+        "fixtures/session/partial-final-line.jsonl",
     };
 
     for (fixture_paths) |path| {

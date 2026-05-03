@@ -50,22 +50,22 @@ pub fn resolveDefaultPathsFrom(allocator: std.mem.Allocator, cwd_path: []const u
     result.home = try allocator.dupe(u8, home_path);
     errdefer allocator.free(result.home);
 
-    result.global_config = try join(allocator, &.{ home_path, ".pi", "agent", "settings.json" });
+    result.global_config = try join(allocator, &.{ home_path, ".pig", "agent", "settings.json" });
     errdefer allocator.free(result.global_config);
 
-    result.global_auth = try join(allocator, &.{ home_path, ".pi", "agent", "auth.json" });
+    result.global_auth = try join(allocator, &.{ home_path, ".pig", "agent", "auth.json" });
     errdefer allocator.free(result.global_auth);
 
-    result.global_models = try join(allocator, &.{ home_path, ".pi", "agent", "models.json" });
+    result.global_models = try join(allocator, &.{ home_path, ".pig", "agent", "models.json" });
     errdefer allocator.free(result.global_models);
 
-    result.global_sessions = try join(allocator, &.{ home_path, ".pi", "agent", "sessions" });
+    result.global_sessions = try join(allocator, &.{ home_path, ".pig", "agent", "sessions" });
     errdefer allocator.free(result.global_sessions);
 
-    result.project_config = try join(allocator, &.{ cwd_path, ".pi", "settings.json" });
+    result.project_config = try join(allocator, &.{ cwd_path, ".pig", "settings.json" });
     errdefer allocator.free(result.project_config);
 
-    result.project_resources = try join(allocator, &.{ cwd_path, ".pi" });
+    result.project_resources = try join(allocator, &.{ cwd_path, ".pig" });
     errdefer allocator.free(result.project_resources);
 
     return result;

@@ -1,6 +1,10 @@
 const std = @import("std");
 const paths = @import("../util/paths.zig");
 
+pub const entry = @import("entry.zig");
+pub const store = @import("store.zig");
+pub const tree = @import("tree.zig");
+
 pub const SessionPathSet = struct {
     sessions_dir: []const u8,
 

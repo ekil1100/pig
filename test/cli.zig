@@ -38,8 +38,8 @@ test "cli dispatches version help paths doctor and unknown commands" {
     stdout.clearRetainingCapacity();
     stderr.clearRetainingCapacity();
     try std.testing.expectEqual(cli.ExitCode.ok, try cli.runWithContext(&.{"--help"}, context, &stdout.writer, &stderr.writer));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "Pig v1.0 M3") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "built-in coding tools") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "Pig v1.0 M4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "session JSONL foundation") != null);
 
     stdout.clearRetainingCapacity();
     stderr.clearRetainingCapacity();
@@ -84,23 +84,23 @@ test "doctor reports missing home instead of ok dot" {
     try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "home: ok .") == null);
 }
 
-test "default paths include pi-compatible global and project paths" {
+test "default paths include pig global and project paths" {
     const set = try paths.resolveDefaultPaths(std.testing.allocator);
     defer set.deinit(std.testing.allocator);
 
-    try std.testing.expect(std.mem.endsWith(u8, set.global_config, ".pi/agent/settings.json"));
-    try std.testing.expect(std.mem.endsWith(u8, set.global_auth, ".pi/agent/auth.json"));
-    try std.testing.expect(std.mem.endsWith(u8, set.global_models, ".pi/agent/models.json"));
-    try std.testing.expect(std.mem.endsWith(u8, set.global_sessions, ".pi/agent/sessions"));
-    try std.testing.expect(std.mem.endsWith(u8, set.project_config, ".pi/settings.json"));
-    try std.testing.expect(std.mem.endsWith(u8, set.project_resources, ".pi"));
+    try std.testing.expect(std.mem.endsWith(u8, set.global_config, ".pig/agent/settings.json"));
+    try std.testing.expect(std.mem.endsWith(u8, set.global_auth, ".pig/agent/auth.json"));
+    try std.testing.expect(std.mem.endsWith(u8, set.global_models, ".pig/agent/models.json"));
+    try std.testing.expect(std.mem.endsWith(u8, set.global_sessions, ".pig/agent/sessions"));
+    try std.testing.expect(std.mem.endsWith(u8, set.project_config, ".pig/settings.json"));
+    try std.testing.expect(std.mem.endsWith(u8, set.project_resources, ".pig"));
 }
 
 test "session default paths expose a session-specific path set" {
     const set = try pig.session.resolveDefaultPaths(std.testing.allocator);
     defer set.deinit(std.testing.allocator);
 
-    try std.testing.expect(std.mem.endsWith(u8, set.sessions_dir, ".pi/agent/sessions"));
+    try std.testing.expect(std.mem.endsWith(u8, set.sessions_dir, ".pig/agent/sessions"));
 }
 
 test "m0 placeholder modules expose stable public constants and enums" {

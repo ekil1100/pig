@@ -357,8 +357,8 @@ integrations -> core/rpc
 交付物：
 
 - Config hierarchy：
-  - global `~/.pi/agent/settings.json`
-  - project `.pi/settings.json`
+  - global `~/.pig/agent/settings.json`
+  - project `.pig/settings.json`
   - CLI flags
   - nested object merge
 - Auth：

@@ -4,7 +4,7 @@ Pig is a local-first coding-agent project implemented in Zig.
 
 The Zig implementation targets Zig 0.16.x.
 
-M0 established the engineering foundation and CLI diagnostics. M1 added the provider layer foundation: provider message/content types, unified streaming events, SSE parsing, OpenAI-compatible recorded parser, Anthropic recorded parser, provider auth resolution, and optional live smoke harness. M2 added the reusable core agent runtime: state ownership, turn loop, provider-event bridge, fake tool-call loop, agent events, middleware hooks, cooperative abort, and offline agent fixtures. M3 adds built-in local coding tools: read, write, edit, bash, grep, find, and ls.
+M0 established the engineering foundation and CLI diagnostics. M1 added the provider layer foundation: provider message/content types, unified streaming events, SSE parsing, OpenAI-compatible recorded parser, Anthropic recorded parser, provider auth resolution, and optional live smoke harness. M2 added the reusable core agent runtime: state ownership, turn loop, provider-event bridge, fake tool-call loop, agent events, middleware hooks, cooperative abort, and offline agent fixtures. M3 added built-in local coding tools: read, write, edit, bash, grep, find, and ls. M4 starts the local append-only session JSONL store and context tree foundation.
 
 Available local commands:
 
@@ -37,6 +37,7 @@ zig build smoke
 zig build provider-fixtures
 zig build agent-fixtures
 zig build tools-fixtures
+zig build session-fixtures
 zig build provider-live
 zig build fmt-check
 ```
@@ -61,7 +62,7 @@ API keys must come from the environment and must not be committed.
 - `src/core` — shared errors, ID placeholders, and M2 `core.agent` runtime
 - `src/provider` — M1 provider models, events, SSE parsing, auth, transport, recorded parsers
 - `src/tools` — M3 built-in coding tools, metadata, approval, path policy, and registry adapter
-- `src/session` — session path placeholders
+- `src/session` — M4 session entry DTOs, append-only JSONL store, and context tree index
 - `src/resources` — resource placeholders
 - `src/tui` — terminal capability placeholders
 - `src/rpc` / `src/plugin` — protocol version placeholders
@@ -86,4 +87,4 @@ API keys must come from the environment and must not be committed.
 - Default tests are offline and do not require API keys.
 - M2 agent runtime is available as a reusable core module and is tested with scripted providers/fake tools.
 - M3 built-in coding tools are available as reusable modules and through the M2 tool registry adapter.
-- Sessions and product CLI modes start in later milestones.
+- M4 session entry/store/tree foundations are available as reusable modules; product CLI modes start in later milestones.

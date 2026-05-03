@@ -57,7 +57,7 @@ pub fn runWithContext(args: []const []const u8, context: Context, stdout: anytyp
 
 fn writeHelp(writer: anytype) !void {
     try writer.writeAll(
-        \\Pig v1.0 M3
+        \\Pig v1.0 M4
         \\
         \\Usage:
         \\  pig --version
@@ -66,7 +66,7 @@ fn writeHelp(writer: anytype) !void {
         \\  pig paths
         \\
         \\The product CLI modes are not implemented yet.
-        \\M3 includes reusable built-in coding tools; sessions, product modes,
+        \\M4 includes the local session JSONL foundation; product modes
         \\and TUI behavior start in later milestones.
         \\
     );
@@ -103,7 +103,7 @@ fn writeDoctor(context: Context, writer: anytype) !void {
     const set = try resolveRuntimePaths(context);
     defer set.deinit(context.allocator);
 
-    try writer.writeAll("Pig doctor (M3)\n");
+    try writer.writeAll("Pig doctor (M4)\n");
     try writer.print("cwd: ok {s}\n", .{set.cwd});
     if (context.env_home) |home| {
         try writer.print("home: ok {s}\n", .{home});

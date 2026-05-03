@@ -69,6 +69,9 @@ pub fn build(b: *std.Build) void {
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/tools_registry.zig");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/tools_fixtures.zig");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/agent_runtime_coding_tools.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/session_entry.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/session_store.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/session_fixtures.zig");
 
     const provider_fixtures_step = b.step("provider-fixtures", "Run offline provider recorded fixture tests");
     _ = addPigTest(b, provider_fixtures_step, pig_module, target, optimize, "test/provider_openai.zig");
@@ -83,6 +86,11 @@ pub fn build(b: *std.Build) void {
     _ = addPigTest(b, tools_fixtures_step, pig_module, target, optimize, "test/tools_search.zig");
     _ = addPigTest(b, tools_fixtures_step, pig_module, target, optimize, "test/tools_fixtures.zig");
     _ = addPigTest(b, tools_fixtures_step, pig_module, target, optimize, "test/agent_runtime_coding_tools.zig");
+
+    const session_fixtures_step = b.step("session-fixtures", "Run offline session fixture tests");
+    _ = addPigTest(b, session_fixtures_step, pig_module, target, optimize, "test/session_entry.zig");
+    _ = addPigTest(b, session_fixtures_step, pig_module, target, optimize, "test/session_store.zig");
+    _ = addPigTest(b, session_fixtures_step, pig_module, target, optimize, "test/session_fixtures.zig");
 
     const live_module = b.createModule(.{
         .root_source_file = b.path("src/provider/live_smoke.zig"),
