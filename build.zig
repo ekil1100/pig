@@ -46,6 +46,7 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/cli.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/cli_modes.zig");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/fixtures.zig");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/provider_types.zig");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/provider_events.zig");
@@ -91,6 +92,9 @@ pub fn build(b: *std.Build) void {
     _ = addPigTest(b, session_fixtures_step, pig_module, target, optimize, "test/session_entry.zig");
     _ = addPigTest(b, session_fixtures_step, pig_module, target, optimize, "test/session_store.zig");
     _ = addPigTest(b, session_fixtures_step, pig_module, target, optimize, "test/session_fixtures.zig");
+
+    const cli_modes_step = b.step("cli-modes", "Run CLI mode dispatch and output tests");
+    _ = addPigTest(b, cli_modes_step, pig_module, target, optimize, "test/cli_modes.zig");
 
     const live_module = b.createModule(.{
         .root_source_file = b.path("src/provider/live_smoke.zig"),

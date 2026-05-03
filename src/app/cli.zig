@@ -1,5 +1,8 @@
 const std = @import("std");
+const agent = @import("../core/agent/mod.zig");
+const parsed_args = @import("args.zig");
 const build_info = @import("build_info.zig");
+const app_runtime = @import("runtime.zig");
 const paths = @import("../util/paths.zig");
 
 pub const ExitCode = enum(u8) {
@@ -14,6 +17,7 @@ pub const Context = struct {
     io: ?std.Io = null,
     env_home: ?[]const u8 = null,
     env_tmpdir: ?[]const u8 = null,
+    model_client: ?agent.ModelClient = null,
 };
 
 pub fn run(args: []const []const u8, stdout: anytype, stderr: anytype) !ExitCode {
@@ -21,55 +25,89 @@ pub fn run(args: []const []const u8, stdout: anytype, stderr: anytype) !ExitCode
 }
 
 pub fn runWithContext(args: []const []const u8, context: Context, stdout: anytype, stderr: anytype) !ExitCode {
-    if (args.len == 0) {
-        try writeHelp(stdout);
-        return .ok;
-    }
-
-    const command = args[0];
-    if (args.len > 1) {
-        try stderr.print("unexpected argument for {s}: {s}\n", .{ command, args[1] });
+    const command = parsed_args.parse(args) catch |err| {
+        try writeParseError(stderr, err);
         try writeHelp(stderr);
         return .usage;
-    }
+    };
 
-    if (std.mem.eql(u8, command, "--version")) {
-        try build_info.write(stdout);
-        return .ok;
+    switch (command) {
+        .help => {
+            try writeHelp(stdout);
+            return .ok;
+        },
+        .version => {
+            try build_info.write(stdout);
+            return .ok;
+        },
+        .paths => {
+            try writePaths(context, stdout);
+            return .ok;
+        },
+        .doctor => {
+            try writeDoctor(context, stdout);
+            return .ok;
+        },
+        .run => |config| return mapRunStatus(switch (config.mode) {
+            .print => try app_runtime.runPrint(config, .{
+                .allocator = context.allocator,
+                .io = context.io,
+                .env_home = context.env_home,
+                .model_client = context.model_client,
+            }, stdout, stderr),
+            .interactive, .rpc => try app_runtime.unsupportedMode(config, stdout, stderr),
+        }),
     }
-    if (std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "help")) {
-        try writeHelp(stdout);
-        return .ok;
-    }
-    if (std.mem.eql(u8, command, "paths")) {
-        try writePaths(context, stdout);
-        return .ok;
-    }
-    if (std.mem.eql(u8, command, "doctor")) {
-        try writeDoctor(context, stdout);
-        return .ok;
-    }
-
-    try stderr.print("unknown command: {s}\n", .{command});
-    try writeHelp(stderr);
-    return .usage;
 }
 
 fn writeHelp(writer: anytype) !void {
     try writer.writeAll(
-        \\Pig v1.0 M4
+        \\Pig v1.0 M5
         \\
         \\Usage:
         \\  pig --version
         \\  pig --help
         \\  pig doctor
         \\  pig paths
+        \\  pig --print "prompt"
+        \\  pig --json --print "prompt"
+        \\  pig --interactive
+        \\  pig --rpc
         \\
-        \\The product CLI modes are not implemented yet.
-        \\M4 includes the local session JSONL foundation; product modes
-        \\and TUI behavior start in later milestones.
+        \\Options:
+        \\  --cwd PATH              Set workspace root for tool execution
+        \\  --provider NAME         Select provider label
+        \\  --model NAME            Select model label
+        \\  --thinking LEVEL        off, low, medium, high, xhigh, max
+        \\  --no-tools              Disable builtin tools
+        \\  --include-p1-tools      Include grep/find/ls in addition to P0 tools
+        \\  --ephemeral             Do not attach the run to a saved session
+        \\
+        \\M5 wires product-mode dispatch and the non-interactive print path.
+        \\Interactive TUI and RPC serving are exposed as mode skeletons.
         \\
     );
+}
+
+fn writeParseError(writer: anytype, err: parsed_args.ParseError) !void {
+    const message = switch (err) {
+        error.MissingValue => "missing value for option",
+        error.UnknownArgument => "unknown argument",
+        error.UnexpectedArgument => "unexpected positional argument",
+        error.DuplicateMode => "only one mode may be selected",
+        error.InvalidCombination => "invalid option combination",
+        error.InvalidValue => "invalid option value",
+    };
+    try writer.print("{s}\n", .{message});
+}
+
+fn mapRunStatus(status: app_runtime.RunStatus) ExitCode {
+    return switch (status) {
+        .ok => .ok,
+        .failure => .failure,
+        .usage => .usage,
+        .internal => .internal,
+    };
 }
 
 fn resolveRuntimePaths(context: Context) !paths.PathSet {
@@ -103,7 +141,7 @@ fn writeDoctor(context: Context, writer: anytype) !void {
     const set = try resolveRuntimePaths(context);
     defer set.deinit(context.allocator);
 
-    try writer.writeAll("Pig doctor (M4)\n");
+    try writer.writeAll("Pig doctor (M5)\n");
     try writer.print("cwd: ok {s}\n", .{set.cwd});
     if (context.env_home) |home| {
         try writer.print("home: ok {s}\n", .{home});

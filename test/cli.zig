@@ -38,8 +38,8 @@ test "cli dispatches version help paths doctor and unknown commands" {
     stdout.clearRetainingCapacity();
     stderr.clearRetainingCapacity();
     try std.testing.expectEqual(cli.ExitCode.ok, try cli.runWithContext(&.{"--help"}, context, &stdout.writer, &stderr.writer));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "Pig v1.0 M4") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "session JSONL foundation") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "Pig v1.0 M5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "--print") != null);
 
     stdout.clearRetainingCapacity();
     stderr.clearRetainingCapacity();
@@ -56,7 +56,7 @@ test "cli dispatches version help paths doctor and unknown commands" {
     stdout.clearRetainingCapacity();
     stderr.clearRetainingCapacity();
     try std.testing.expectEqual(cli.ExitCode.usage, try cli.runWithContext(&.{"nope"}, context, &stdout.writer, &stderr.writer));
-    try std.testing.expect(std.mem.indexOf(u8, stderr.written(), "unknown command") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr.written(), "unexpected positional argument") != null);
 }
 
 test "cli reports usage for extra arguments" {
@@ -68,7 +68,7 @@ test "cli reports usage for extra arguments" {
     const code = try cli.runWithContext(&.{ "paths", "extra" }, .{ .allocator = std.testing.allocator }, &stdout.writer, &stderr.writer);
 
     try std.testing.expectEqual(cli.ExitCode.usage, code);
-    try std.testing.expect(std.mem.indexOf(u8, stderr.written(), "unexpected argument") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr.written(), "unexpected positional argument") != null);
 }
 
 test "doctor reports missing home instead of ok dot" {
