@@ -19,6 +19,15 @@ pub const AgentRunError = error{
 };
 
 pub const AgentRuntime = struct {
+    pub const AbortSignal = struct {
+        ptr: *const anyopaque,
+        load_fn: *const fn (ptr: *const anyopaque) bool,
+
+        pub fn load(self: AbortSignal) bool {
+            return self.load_fn(self.ptr);
+        }
+    };
+
     allocator: std.mem.Allocator,
     state: *state.AgentState,
     model: model_client.ModelClient,
@@ -26,6 +35,7 @@ pub const AgentRuntime = struct {
     hooks: middleware.MiddlewareHooks = .{},
     event_sink: events.AgentEventSink,
     abort_flag: ?*const bool = null,
+    abort_signal: ?AbortSignal = null,
 
     pub fn runUserText(self: *AgentRuntime, text: []const u8) AgentRunError!void {
         if (self.abortRequested()) {
@@ -135,6 +145,7 @@ pub const AgentRuntime = struct {
     }
 
     fn abortRequested(self: *AgentRuntime) bool {
+        if (self.abort_signal) |signal| return signal.load();
         return if (self.abort_flag) |flag| flag.* else false;
     }
 

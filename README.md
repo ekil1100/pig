@@ -4,15 +4,17 @@ Pig is a local-first coding-agent project implemented in Zig.
 
 The Zig implementation targets Zig 0.16.x.
 
-M0 established the engineering foundation and CLI diagnostics. M1 added the provider layer foundation: provider message/content types, unified streaming events, SSE parsing, OpenAI-compatible recorded parser, Anthropic recorded parser, provider auth resolution, and optional live smoke harness. M2 added the reusable core agent runtime: state ownership, turn loop, provider-event bridge, fake tool-call loop, agent events, middleware hooks, cooperative abort, and offline agent fixtures. M3 added built-in local coding tools: read, write, edit, bash, grep, find, and ls. M4 starts the local append-only session JSONL store and context tree foundation.
+M0 established the engineering foundation and CLI diagnostics. M1 added the provider layer foundation: provider message/content types, unified streaming events, SSE parsing, OpenAI-compatible recorded parser, Anthropic recorded parser, provider auth resolution, and optional live smoke harness. M2 added the reusable core agent runtime: state ownership, turn loop, provider-event bridge, fake tool-call loop, agent events, middleware hooks, cooperative abort, and offline agent fixtures. M3 added built-in local coding tools: read, write, edit, bash, grep, find, and ls. M4 added the local append-only session JSONL store and context tree foundation. M5 added print/json CLI modes, M6 added the terminal UI foundation and live interactive loop, and M7 added config/auth/models/resources loading.
 
 Available local commands:
 
 ```bash
+zig build run
 zig build run -- --version
 zig build run -- --help
 zig build run -- doctor
 zig build run -- paths
+zig build run -- --interactive
 ```
 
 ## Zig Requirements
@@ -63,8 +65,8 @@ API keys must come from the environment and must not be committed.
 - `src/provider` — M1 provider models, events, SSE parsing, auth, transport, recorded parsers
 - `src/tools` — M3 built-in coding tools, metadata, approval, path policy, and registry adapter
 - `src/session` — M4 session entry DTOs, append-only JSONL store, and context tree index
-- `src/resources` — resource placeholders
-- `src/tui` — terminal capability placeholders
+- `src/resources` — settings, model registry, context files, metadata discovery, and warnings
+- `src/tui` — terminal lifecycle, input decoding, editor state, layout, components, renderer, and testing helpers
 - `src/rpc` / `src/plugin` — protocol version placeholders
 - `src/util` — path and testing helpers
 - `test` — unit, fixture, provider, and agent runtime tests
@@ -87,4 +89,4 @@ API keys must come from the environment and must not be committed.
 - Default tests are offline and do not require API keys.
 - M2 agent runtime is available as a reusable core module and is tested with scripted providers/fake tools.
 - M3 built-in coding tools are available as reusable modules and through the M2 tool registry adapter.
-- M4 session entry/store/tree foundations are available as reusable modules; product CLI modes start in later milestones.
+- `pig` with no arguments starts the terminal UI. In non-TTY contexts, interactive mode uses a cooked fallback and exits cleanly on EOF.

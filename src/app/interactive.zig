@@ -12,6 +12,8 @@ pub const Context = struct {
     system_prompt: ?[]const u8 = null,
     reload_hook: ?ReloadHook = null,
     size: tui.layout.Size = .{ .width = 80, .height = 24 },
+    initial_status: ?[]const u8 = null,
+    recover_missing_model: bool = false,
 };
 
 pub const ReloadResult = struct {
@@ -90,6 +92,42 @@ pub const InteractiveEventQueue = struct {
     pub fn popFront(self: *InteractiveEventQueue) ?QueuedInteractiveEvent {
         if (self.events.items.len == 0) return null;
         return self.events.orderedRemove(0);
+    }
+};
+
+const SharedInteractiveEventQueue = struct {
+    allocator: std.mem.Allocator,
+    mutex: std.atomic.Mutex = .unlocked,
+    queue: InteractiveEventQueue,
+
+    fn init(allocator: std.mem.Allocator) SharedInteractiveEventQueue {
+        return .{ .allocator = allocator, .queue = InteractiveEventQueue.init(allocator) };
+    }
+
+    fn deinit(self: *SharedInteractiveEventQueue) void {
+        self.lock();
+        defer self.unlock();
+        self.queue.deinit();
+    }
+
+    fn push(self: *SharedInteractiveEventQueue, kind: InteractiveEventKind, text: []const u8, is_streaming: bool) !void {
+        self.lock();
+        defer self.unlock();
+        try self.queue.push(kind, text, is_streaming);
+    }
+
+    fn popFront(self: *SharedInteractiveEventQueue) ?QueuedInteractiveEvent {
+        self.lock();
+        defer self.unlock();
+        return self.queue.popFront();
+    }
+
+    fn lock(self: *SharedInteractiveEventQueue) void {
+        while (!self.mutex.tryLock()) std.Thread.yield() catch {};
+    }
+
+    fn unlock(self: *SharedInteractiveEventQueue) void {
+        self.mutex.unlock();
     }
 };
 
@@ -193,42 +231,326 @@ pub fn runScript(config: args.RunConfig, context: Context, input_bytes: []const 
     });
     defer app.deinit();
     try app.setSystemPrompt(context.system_prompt);
+    if (context.initial_status) |status| try app.appendItem(.status, status, false);
 
     const events = try tui.input.decodeAll(context.allocator, input_bytes);
     defer context.allocator.free(events);
 
     try renderApp(&app, output);
     for (events) |event| {
-        const result = try app.handleInput(event);
-        switch (result) {
-            .none => try renderApp(&app, output),
-            .exit => return .ok,
-            .abort => {
-                app.worker.requestAbort();
-                try app.appendItem(.status, "abort requested", false);
-                try renderApp(&app, output);
-            },
-            .submit => |prompt| {
-                defer app.editor.freeSubmitted(prompt);
-                if (std.mem.eql(u8, std.mem.trim(u8, prompt, " \t\r\n"), "/reload")) {
-                    try handleReload(context, &app);
-                    try renderApp(&app, output);
-                    continue;
-                }
-                try app.appendItem(.user, prompt, false);
-                try renderApp(&app, output);
-                const model = context.model_client orelse {
-                    try app.appendItem(.error_item, "model client unavailable", false);
-                    try renderApp(&app, output);
-                    return .failure;
-                };
-                try runTurn(config, context, &app, model, prompt);
-                try renderApp(&app, output);
-            },
+        const status = try handleInputEvent(config, context, &app, event, output);
+        switch (status) {
+            .continue_loop => {},
+            .exit_ok => return .ok,
+            .failure => return .failure,
+            .internal => return .internal,
         }
     }
     return .ok;
 }
+
+pub fn runLive(config: args.RunConfig, context: Context, io: std.Io, output: *std.Io.Writer) !InteractiveStatus {
+    var app = InteractiveApp.init(context.allocator, context.size, .{
+        .system_prompt = context.system_prompt,
+        .thinking_level = config.thinking_level,
+        .max_iterations = config.max_iterations,
+    });
+    defer app.deinit();
+    try app.setSystemPrompt(context.system_prompt);
+    if (context.initial_status) |status| try app.appendItem(.status, status, false);
+
+    var session = tui.terminal.TerminalSession{ .size = context.size };
+    const stdin_file = std.Io.File.stdin();
+    const stdout_file = std.Io.File.stdout();
+    const stdin_is_tty = stdin_file.isTty(io) catch false;
+    const stdout_is_tty = stdout_file.isTty(io) catch false;
+    const interactive_tty = stdin_is_tty and stdout_is_tty;
+    if (interactive_tty) {
+        session.enterRawModeForFd(std.posix.STDIN_FILENO) catch {};
+    }
+    defer session.restoreForFd(std.posix.STDIN_FILENO);
+
+    if (interactive_tty) {
+        try output.writeAll("\x1b[?1049h\x1b[?25l");
+        session.alternate_entered = true;
+        session.cursor_hidden = true;
+        try output.flush();
+    }
+    defer if (interactive_tty) {
+        output.writeAll("\x1b[?25h\x1b[?1049l") catch {};
+        output.flush() catch {};
+    };
+
+    try renderApp(&app, output);
+    try output.flush();
+
+    var active_turn: ?*ActiveTurn = null;
+    defer if (active_turn) |turn| turn.finish(&app);
+
+    var input_buffer: [128]u8 = undefined;
+    while (true) {
+        try pumpActiveTurn(&active_turn, &app, output);
+        const poll_timeout: i32 = if (active_turn == null) -1 else 25;
+        var poll_fds = [_]std.posix.pollfd{.{
+            .fd = std.posix.STDIN_FILENO,
+            .events = std.posix.POLL.IN,
+            .revents = 0,
+        }};
+        const ready = try std.posix.poll(&poll_fds, poll_timeout);
+        if (ready == 0) continue;
+        const has_input = (poll_fds[0].revents & std.posix.POLL.IN) != 0;
+        if (!has_input and (poll_fds[0].revents & (std.posix.POLL.HUP | std.posix.POLL.ERR | std.posix.POLL.NVAL)) != 0) return .ok;
+
+        const read_len = std.posix.read(std.posix.STDIN_FILENO, &input_buffer) catch |err| switch (err) {
+            error.WouldBlock => continue,
+            else => return err,
+        };
+        if (read_len == 0) return .ok;
+
+        var cooked_buffer: [128]u8 = undefined;
+        const bytes = if (session.mode == .raw)
+            input_buffer[0..read_len]
+        else blk: {
+            for (input_buffer[0..read_len], 0..) |byte, index| {
+                cooked_buffer[index] = if (byte == '\n') '\r' else byte;
+            }
+            break :blk cooked_buffer[0..read_len];
+        };
+
+        const events = try tui.input.decodeAll(context.allocator, bytes);
+        defer context.allocator.free(events);
+        for (events) |event| {
+            const status = try handleLiveInputEvent(config, context, &app, &active_turn, event, output);
+            try output.flush();
+            switch (status) {
+                .continue_loop => {},
+                .exit_ok => return .ok,
+                .failure => return .failure,
+                .internal => return .internal,
+            }
+        }
+    }
+}
+
+const InputStatus = enum { continue_loop, exit_ok, failure, internal };
+
+fn handleLiveInputEvent(config: args.RunConfig, context: Context, app: *InteractiveApp, active_turn: *?*ActiveTurn, event: tui.input.KeyEvent, output: *std.Io.Writer) !InputStatus {
+    const result = try app.handleInput(event);
+    switch (result) {
+        .none => try renderApp(app, output),
+        .exit => {
+            if (active_turn.*) |turn| {
+                turn.requestAbort();
+                try app.appendItem(.status, "abort requested", false);
+                try renderApp(app, output);
+                return .continue_loop;
+            }
+            return .exit_ok;
+        },
+        .abort => {
+            if (active_turn.*) |turn| turn.requestAbort();
+            app.worker.requestAbort();
+            try app.appendItem(.status, "abort requested", false);
+            try renderApp(app, output);
+        },
+        .submit => |prompt| {
+            var prompt_owned = true;
+            defer if (prompt_owned) app.editor.freeSubmitted(prompt);
+            if (std.mem.eql(u8, std.mem.trim(u8, prompt, " \t\r\n"), "/reload")) {
+                try handleReload(context, app);
+                try renderApp(app, output);
+                return .continue_loop;
+            }
+            if (active_turn.* != null) {
+                try app.appendItem(.status, "turn already running", false);
+                try renderApp(app, output);
+                return .continue_loop;
+            }
+            try app.appendItem(.user, prompt, false);
+            try renderApp(app, output);
+            const model = context.model_client orelse {
+                try app.appendItem(.error_item, "model client unavailable", false);
+                try renderApp(app, output);
+                return if (context.recover_missing_model) .continue_loop else .failure;
+            };
+            active_turn.* = try ActiveTurn.start(config, context, app, model, prompt);
+            prompt_owned = false;
+        },
+    }
+    return .continue_loop;
+}
+
+fn handleInputEvent(config: args.RunConfig, context: Context, app: *InteractiveApp, event: tui.input.KeyEvent, output: *std.Io.Writer) !InputStatus {
+    const result = try app.handleInput(event);
+    switch (result) {
+        .none => try renderApp(app, output),
+        .exit => return .exit_ok,
+        .abort => {
+            app.worker.requestAbort();
+            try app.appendItem(.status, "abort requested", false);
+            try renderApp(app, output);
+        },
+        .submit => |prompt| {
+            defer app.editor.freeSubmitted(prompt);
+            if (std.mem.eql(u8, std.mem.trim(u8, prompt, " \t\r\n"), "/reload")) {
+                try handleReload(context, app);
+                try renderApp(app, output);
+                return .continue_loop;
+            }
+            try app.appendItem(.user, prompt, false);
+            try renderApp(app, output);
+            const model = context.model_client orelse {
+                try app.appendItem(.error_item, "model client unavailable", false);
+                try renderApp(app, output);
+                return if (context.recover_missing_model) .continue_loop else .failure;
+            };
+            try runTurn(config, context, app, model, prompt);
+            try renderApp(app, output);
+        },
+    }
+    return .continue_loop;
+}
+
+const ActiveTurn = struct {
+    allocator: std.mem.Allocator,
+    config: args.RunConfig,
+    context: Context,
+    app: *InteractiveApp,
+    model: agent.ModelClient,
+    prompt: []const u8,
+    queue: SharedInteractiveEventQueue,
+    abort_requested: std.atomic.Value(bool) = .init(false),
+    done: std.atomic.Value(bool) = .init(false),
+    thread: ?std.Thread = null,
+
+    fn start(config: args.RunConfig, context: Context, app: *InteractiveApp, model: agent.ModelClient, prompt: []const u8) !*ActiveTurn {
+        const turn = try context.allocator.create(ActiveTurn);
+        errdefer context.allocator.destroy(turn);
+        turn.* = .{
+            .allocator = context.allocator,
+            .config = config,
+            .context = context,
+            .app = app,
+            .model = model,
+            .prompt = prompt,
+            .queue = SharedInteractiveEventQueue.init(context.allocator),
+        };
+        errdefer turn.queue.deinit();
+        app.worker.busy = true;
+        app.worker.abort_requested = false;
+        errdefer app.worker.busy = false;
+        turn.thread = try std.Thread.spawn(.{}, ActiveTurn.run, .{turn});
+        return turn;
+    }
+
+    fn run(turn: *ActiveTurn) void {
+        defer turn.done.store(true, .release);
+        var sink = QueueSink{ .queue = &turn.queue };
+        var runtime = agent.AgentRuntime{
+            .allocator = turn.context.allocator,
+            .state = &turn.app.state,
+            .model = turn.model,
+            .event_sink = sink.sink(),
+            .abort_signal = .{ .ptr = turn, .load_fn = loadAbort },
+        };
+        runtime.runUserText(turn.prompt) catch |err| switch (err) {
+            error.Aborted => turn.queue.push(.status, "aborted", false) catch {},
+            else => {
+                turn.queue.push(.error_item, "agent turn failed", false) catch {};
+            },
+        };
+    }
+
+    fn finish(turn: *ActiveTurn, app: *InteractiveApp) void {
+        if (turn.thread) |thread| thread.join();
+        turn.queue.deinit();
+        turn.allocator.free(turn.prompt);
+        app.worker.busy = false;
+        app.worker.abort_requested = false;
+        turn.allocator.destroy(turn);
+    }
+
+    fn requestAbort(turn: *ActiveTurn) void {
+        turn.abort_requested.store(true, .release);
+    }
+
+    fn loadAbort(ptr: *const anyopaque) bool {
+        const turn: *const ActiveTurn = @ptrCast(@alignCast(ptr));
+        return turn.abort_requested.load(.acquire);
+    }
+};
+
+fn pumpActiveTurn(active_turn: *?*ActiveTurn, app: *InteractiveApp, output: *std.Io.Writer) !void {
+    const turn = active_turn.* orelse return;
+    var changed = try drainQueuedEvents(turn, app);
+    if (turn.done.load(.acquire)) {
+        if (try drainQueuedEvents(turn, app)) changed = true;
+        active_turn.* = null;
+        turn.finish(app);
+        changed = true;
+    }
+    if (changed) try renderApp(app, output);
+}
+
+fn drainQueuedEvents(turn: *ActiveTurn, app: *InteractiveApp) !bool {
+    var changed = false;
+    while (turn.queue.popFront()) |event_const| {
+        var event = event_const;
+        defer event.deinit(turn.allocator);
+        try applyQueuedEvent(app, event);
+        changed = true;
+    }
+    return changed;
+}
+
+fn applyQueuedEvent(app: *InteractiveApp, event: QueuedInteractiveEvent) !void {
+    switch (event.kind) {
+        .assistant => {
+            if (!event.is_streaming and event.text.items.len == 0) {
+                app.markAssistantDone();
+            } else {
+                try app.appendToLastAssistant(event.text.items);
+            }
+        },
+        .tool => try app.appendItem(.tool, event.text.items, event.is_streaming),
+        .error_item => try app.appendItem(.error_item, event.text.items, event.is_streaming),
+        .status => try app.appendItem(.status, event.text.items, event.is_streaming),
+        .user => try app.appendItem(.user, event.text.items, event.is_streaming),
+    }
+}
+
+const QueueSink = struct {
+    queue: *SharedInteractiveEventQueue,
+
+    fn sink(self: *QueueSink) agent.AgentEventSink {
+        return .{ .ptr = self, .on_event = onEvent };
+    }
+
+    fn onEvent(ptr: *anyopaque, event: agent.AgentEvent) agent.events.AgentEventSinkError!void {
+        const self: *QueueSink = @ptrCast(@alignCast(ptr));
+        self.handle(event) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.QueueFull => error.SinkRejectedEvent,
+        };
+    }
+
+    fn handle(self: *QueueSink, event: agent.AgentEvent) !void {
+        switch (event) {
+            .message_start => |start| if (start.role == provider.Role.assistant) try self.queue.push(.assistant, "", true),
+            .message_delta => |delta| if (delta.text_delta) |text| try self.queue.push(.assistant, text, true),
+            .message_end => try self.queue.push(.assistant, "", false),
+            .tool_execution_start => |tool_event| try self.queue.push(.tool, tool_event.name, true),
+            .tool_execution_delta => |delta| try self.queue.push(.tool, delta.message, true),
+            .tool_execution_end => |tool_event| {
+                const text = if (tool_event.is_error) "failed" else "done";
+                try self.queue.push(.tool, text, false);
+            },
+            .error_event => |err| try self.queue.push(.error_item, err.message, false),
+            .abort => try self.queue.push(.status, "aborted", false),
+            else => {},
+        }
+    }
+};
 
 fn handleReload(context: Context, app: *InteractiveApp) !void {
     const hook = context.reload_hook orelse {

@@ -43,7 +43,7 @@ pub const RunConfig = struct {
 };
 
 pub fn parse(argv: []const []const u8) ParseError!ParsedCommand {
-    if (argv.len == 0) return .help;
+    if (argv.len == 0) return .{ .run = .{ .mode = .interactive } };
 
     if (argv.len == 1) {
         if (std.mem.eql(u8, argv[0], "--help") or std.mem.eql(u8, argv[0], "help")) return .help;

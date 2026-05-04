@@ -75,6 +75,7 @@ fn writeHelp(writer: anytype) !void {
         \\Pig v1.0 M7
         \\
         \\Usage:
+        \\  pig
         \\  pig --version
         \\  pig --help
         \\  pig doctor
@@ -92,6 +93,8 @@ fn writeHelp(writer: anytype) !void {
         \\  --no-tools              Disable builtin tools
         \\  --include-p1-tools      Include grep/find/ls in addition to P0 tools
         \\  --ephemeral             Do not attach the run to a saved session
+        \\
+        \\Running `pig` with no arguments starts the terminal UI.
         \\
         \\M7 adds config/auth/models/resources loading on top of terminal UI foundation.
         \\RPC serving remains exposed as a mode skeleton.
@@ -126,11 +129,6 @@ fn runInteractive(config: parsed_args.RunConfig, context: Context, stdout: *std.
         try stderr.writeAll("model client unavailable\n");
         return .failure;
     }
-    const input = context.interactive_input orelse {
-        try stderr.writeAll("interactive terminal input is not wired in this M7 build\n");
-        return .failure;
-    };
-
     var resolved: ?config_runtime.ResolvedRuntimeConfig = null;
     defer if (resolved) |*runtime_config| runtime_config.deinit(context.allocator);
     if (context.io) |io| {
@@ -147,7 +145,10 @@ fn runInteractive(config: parsed_args.RunConfig, context: Context, stdout: *std.
 
     var owned_model: ?model_factory.OwnedModelClient = null;
     defer if (owned_model) |*client| client.deinit();
-    const model = if (context.model_client) |injected|
+    const scripted = context.interactive_input != null;
+    var initial_status: ?[]u8 = null;
+    defer if (initial_status) |status| context.allocator.free(status);
+    const model: ?agent.ModelClient = if (context.model_client) |injected|
         injected
     else if (resolved) |runtime_config| blk: {
         const io = context.io orelse return .internal;
@@ -158,25 +159,43 @@ fn runInteractive(config: parsed_args.RunConfig, context: Context, stdout: *std.
             .env = context.env,
             .model = runtime_config.model,
         }) catch |err| {
-            try stderr.print("{s}\n", .{@errorName(err)});
-            return .failure;
+            if (scripted) {
+                try stderr.print("{s}\n", .{@errorName(err)});
+                return .failure;
+            }
+            initial_status = try std.fmt.allocPrint(context.allocator, "model unavailable: {s}", .{@errorName(err)});
+            break :blk null;
         };
         break :blk owned_model.?.client();
-    } else {
-        try stderr.writeAll("model client unavailable\n");
-        return .failure;
+    } else blk: {
+        if (scripted) {
+            try stderr.writeAll("model client unavailable\n");
+            return .failure;
+        }
+        initial_status = try context.allocator.dupe(u8, "model unavailable");
+        break :blk null;
     };
 
     var reload_context = ReloadContext{ .cli_context = context, .config = config };
     const reload_hook = app_interactive.ReloadHook{ .ptr = &reload_context, .reload_fn = ReloadContext.reload };
     const effective_config = if (resolved) |runtime_config| runtime_config.effective_run_config else config;
-    const status = try app_interactive.runScript(effective_config, .{
+    const interactive_context = app_interactive.Context{
         .allocator = context.allocator,
         .model_client = model,
         .system_prompt = if (resolved) |runtime_config| runtime_config.systemPrompt() else null,
         .reload_hook = if (context.io != null) reload_hook else null,
         .size = context.terminal_size,
-    }, input, stdout);
+        .initial_status = initial_status,
+        .recover_missing_model = !scripted,
+    };
+    const status = if (context.interactive_input) |input|
+        try app_interactive.runScript(effective_config, interactive_context, input, stdout)
+    else if (context.io) |io|
+        try app_interactive.runLive(effective_config, interactive_context, io, stdout)
+    else blk: {
+        try stderr.writeAll("interactive terminal input is unavailable\n");
+        break :blk app_interactive.InteractiveStatus.failure;
+    };
     return switch (status) {
         .ok => .ok,
         .failure => .failure,

@@ -46,3 +46,21 @@ test "editor ctrl-c aborts only while busy" {
     try std.testing.expectEqual(editor.SubmitResult.exit, try state.handle(.{ .kind = .ctrl, .ctrl = 'c' }, false));
     try std.testing.expectEqual(editor.SubmitResult.abort, try state.handle(.{ .kind = .ctrl, .ctrl = 'c' }, true));
 }
+
+test "editor preserves busy input on enter" {
+    var state = editor.EditorState.init(std.testing.allocator);
+    defer state.deinit();
+
+    try state.insert("next");
+    try std.testing.expectEqual(editor.SubmitResult.none, try state.handle(.{ .kind = .enter }, true));
+    try std.testing.expectEqualStrings("next", state.text());
+
+    const result = try state.handle(.{ .kind = .enter }, false);
+    switch (result) {
+        .submit => |prompt| {
+            defer state.freeSubmitted(prompt);
+            try std.testing.expectEqualStrings("next", prompt);
+        },
+        else => return error.TestExpectedEqual,
+    }
+}

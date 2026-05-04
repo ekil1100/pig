@@ -10,10 +10,31 @@ pub const TerminalSession = struct {
     alternate_entered: bool = false,
     cursor_hidden: bool = false,
     synchronized_output: bool = false,
+    original_termios: ?std.posix.termios = null,
 
     pub fn enterRawMode(self: *TerminalSession) void {
         self.mode = .raw;
         self.raw_entered = true;
+    }
+
+    pub fn enterRawModeForFd(self: *TerminalSession, fd: std.posix.fd_t) !void {
+        const original = try std.posix.tcgetattr(fd);
+        var raw = original;
+        setFlag(&raw.iflag, "BRKINT", false);
+        setFlag(&raw.iflag, "ICRNL", false);
+        setFlag(&raw.iflag, "INPCK", false);
+        setFlag(&raw.iflag, "ISTRIP", false);
+        setFlag(&raw.iflag, "IXON", false);
+        setFlag(&raw.oflag, "OPOST", false);
+        setFlag(&raw.lflag, "ECHO", false);
+        setFlag(&raw.lflag, "ICANON", false);
+        setFlag(&raw.lflag, "IEXTEN", false);
+        setFlag(&raw.lflag, "ISIG", false);
+        raw.cc[@intFromEnum(std.posix.V.MIN)] = 1;
+        raw.cc[@intFromEnum(std.posix.V.TIME)] = 0;
+        try std.posix.tcsetattr(fd, .FLUSH, raw);
+        self.original_termios = original;
+        self.enterRawMode();
     }
 
     pub fn enterAlternateScreen(self: *TerminalSession) void {
@@ -37,7 +58,20 @@ pub const TerminalSession = struct {
         if (self.raw_entered) self.mode = .cooked;
         self.raw_entered = false;
     }
+
+    pub fn restoreForFd(self: *TerminalSession, fd: std.posix.fd_t) void {
+        if (self.original_termios) |original| {
+            std.posix.tcsetattr(fd, .FLUSH, original) catch {};
+            self.original_termios = null;
+        }
+        self.restore();
+    }
 };
+
+fn setFlag(flags: anytype, comptime name: []const u8, value: bool) void {
+    const FlagSet = @TypeOf(flags.*);
+    if (@hasField(FlagSet, name)) @field(flags.*, name) = value;
+}
 
 pub const InMemoryTerminal = struct {
     allocator: std.mem.Allocator,
