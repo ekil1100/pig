@@ -2,8 +2,10 @@ const std = @import("std");
 const agent = @import("../core/agent/mod.zig");
 const parsed_args = @import("args.zig");
 const build_info = @import("build_info.zig");
+const app_interactive = @import("interactive.zig");
 const app_runtime = @import("runtime.zig");
 const paths = @import("../util/paths.zig");
+const tui = @import("../tui/mod.zig");
 
 pub const ExitCode = enum(u8) {
     ok = 0,
@@ -18,6 +20,8 @@ pub const Context = struct {
     env_home: ?[]const u8 = null,
     env_tmpdir: ?[]const u8 = null,
     model_client: ?agent.ModelClient = null,
+    interactive_input: ?[]const u8 = null,
+    terminal_size: tui.layout.Size = .{ .width = 80, .height = 24 },
 };
 
 pub fn run(args: []const []const u8, stdout: anytype, stderr: anytype) !ExitCode {
@@ -55,14 +59,15 @@ pub fn runWithContext(args: []const []const u8, context: Context, stdout: anytyp
                 .env_home = context.env_home,
                 .model_client = context.model_client,
             }, stdout, stderr),
-            .interactive, .rpc => try app_runtime.unsupportedMode(config, stdout, stderr),
+            .interactive => try runInteractive(config, context, stdout, stderr),
+            .rpc => try app_runtime.unsupportedMode(config, stdout, stderr),
         }),
     }
 }
 
 fn writeHelp(writer: anytype) !void {
     try writer.writeAll(
-        \\Pig v1.0 M5
+        \\Pig v1.0 M6
         \\
         \\Usage:
         \\  pig --version
@@ -83,8 +88,8 @@ fn writeHelp(writer: anytype) !void {
         \\  --include-p1-tools      Include grep/find/ls in addition to P0 tools
         \\  --ephemeral             Do not attach the run to a saved session
         \\
-        \\M5 wires product-mode dispatch and the non-interactive print path.
-        \\Interactive TUI and RPC serving are exposed as mode skeletons.
+        \\M6 wires product-mode dispatch, print/json, and interactive TUI foundation.
+        \\RPC serving remains exposed as a mode skeleton.
         \\
     );
 }
@@ -106,6 +111,28 @@ fn mapRunStatus(status: app_runtime.RunStatus) ExitCode {
         .ok => .ok,
         .failure => .failure,
         .usage => .usage,
+        .internal => .internal,
+    };
+}
+
+fn runInteractive(config: parsed_args.RunConfig, context: Context, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !app_runtime.RunStatus {
+    if (config.output == .json) return .usage;
+    if (context.model_client == null) {
+        try stderr.writeAll("model client unavailable\n");
+        return .failure;
+    }
+    const input = context.interactive_input orelse {
+        try stderr.writeAll("interactive terminal input is not wired in this M6 build\n");
+        return .failure;
+    };
+    const status = try app_interactive.runScript(config, .{
+        .allocator = context.allocator,
+        .model_client = context.model_client,
+        .size = context.terminal_size,
+    }, input, stdout);
+    return switch (status) {
+        .ok => .ok,
+        .failure => .failure,
         .internal => .internal,
     };
 }
@@ -141,7 +168,7 @@ fn writeDoctor(context: Context, writer: anytype) !void {
     const set = try resolveRuntimePaths(context);
     defer set.deinit(context.allocator);
 
-    try writer.writeAll("Pig doctor (M5)\n");
+    try writer.writeAll("Pig doctor (M6)\n");
     try writer.print("cwd: ok {s}\n", .{set.cwd});
     if (context.env_home) |home| {
         try writer.print("home: ok {s}\n", .{home});

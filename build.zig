@@ -47,6 +47,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/cli.zig");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/cli_modes.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/interactive_mode.zig");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/fixtures.zig");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/provider_types.zig");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/provider_events.zig");
@@ -73,6 +74,10 @@ pub fn build(b: *std.Build) void {
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/session_entry.zig");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/session_store.zig");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/session_fixtures.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/tui_input.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/tui_editor.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/tui_layout.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/tui_render.zig");
 
     const provider_fixtures_step = b.step("provider-fixtures", "Run offline provider recorded fixture tests");
     _ = addPigTest(b, provider_fixtures_step, pig_module, target, optimize, "test/provider_openai.zig");
@@ -95,6 +100,15 @@ pub fn build(b: *std.Build) void {
 
     const cli_modes_step = b.step("cli-modes", "Run CLI mode dispatch and output tests");
     _ = addPigTest(b, cli_modes_step, pig_module, target, optimize, "test/cli_modes.zig");
+
+    const tui_step = b.step("tui", "Run terminal UI unit tests");
+    _ = addPigTest(b, tui_step, pig_module, target, optimize, "test/tui_input.zig");
+    _ = addPigTest(b, tui_step, pig_module, target, optimize, "test/tui_editor.zig");
+    _ = addPigTest(b, tui_step, pig_module, target, optimize, "test/tui_layout.zig");
+    _ = addPigTest(b, tui_step, pig_module, target, optimize, "test/tui_render.zig");
+
+    const interactive_mode_step = b.step("interactive-mode", "Run interactive mode tests");
+    _ = addPigTest(b, interactive_mode_step, pig_module, target, optimize, "test/interactive_mode.zig");
 
     const live_module = b.createModule(.{
         .root_source_file = b.path("src/provider/live_smoke.zig"),

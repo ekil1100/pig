@@ -22,9 +22,9 @@ pub fn runPrint(config: args.RunConfig, context: RuntimeContext, stdout: *std.Io
     const prompt = config.prompt orelse return .usage;
     if (config.session_mode == .resume_session) {
         if (config.output == .json) {
-            app_json.writeError(stdout, "session", "session resume is not implemented in M5 print mode") catch return .internal;
+            app_json.writeError(stdout, "session", "session resume is not implemented in M6 print mode") catch return .internal;
         } else {
-            try stderr.writeAll("session resume is not implemented in M5 print mode\n");
+            try stderr.writeAll("session resume is not implemented in M6 print mode\n");
         }
         return .failure;
     }
@@ -51,8 +51,8 @@ pub fn runPrint(config: args.RunConfig, context: RuntimeContext, stdout: *std.Io
 
 pub fn unsupportedMode(config: args.RunConfig, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !RunStatus {
     const message = switch (config.mode) {
-        .interactive => "interactive mode is not implemented in M5 yet",
-        .rpc => "rpc mode is not implemented in M5 yet",
+        .interactive => "interactive mode is not implemented in M6 yet",
+        .rpc => "rpc mode is not implemented in M6 yet",
         .print => unreachable,
     };
     _ = stdout;

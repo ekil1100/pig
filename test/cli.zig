@@ -38,8 +38,8 @@ test "cli dispatches version help paths doctor and unknown commands" {
     stdout.clearRetainingCapacity();
     stderr.clearRetainingCapacity();
     try std.testing.expectEqual(cli.ExitCode.ok, try cli.runWithContext(&.{"--help"}, context, &stdout.writer, &stderr.writer));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "Pig v1.0 M5") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "--print") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "Pig v1.0 M6") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "--interactive") != null);
 
     stdout.clearRetainingCapacity();
     stderr.clearRetainingCapacity();
