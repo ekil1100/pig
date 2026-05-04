@@ -5,7 +5,10 @@ const tools = @import("../tools/mod.zig");
 const app_json = @import("output_json.zig");
 const app_text = @import("output_text.zig");
 const app_session = @import("session_runtime.zig");
+const config_runtime = @import("config_runtime.zig");
+const model_factory = @import("model_factory.zig");
 const paths = @import("../util/paths.zig");
+const provider = @import("../provider/mod.zig");
 const session = @import("../session/mod.zig");
 const version = @import("../version.zig");
 
@@ -15,6 +18,7 @@ pub const RuntimeContext = struct {
     allocator: std.mem.Allocator,
     io: ?std.Io = null,
     env_home: ?[]const u8 = null,
+    env: ?provider.auth.EnvReader = null,
     model_client: ?agent.ModelClient = null,
 };
 
@@ -22,37 +26,67 @@ pub fn runPrint(config: args.RunConfig, context: RuntimeContext, stdout: *std.Io
     const prompt = config.prompt orelse return .usage;
     if (config.session_mode == .resume_session) {
         if (config.output == .json) {
-            app_json.writeError(stdout, "session", "session resume is not implemented in M6 print mode") catch return .internal;
+            app_json.writeError(stdout, "session", "session resume is not implemented in M7 print mode") catch return .internal;
         } else {
-            try stderr.writeAll("session resume is not implemented in M6 print mode\n");
+            try stderr.writeAll("session resume is not implemented in M7 print mode\n");
         }
         return .failure;
     }
-    const model = context.model_client orelse {
-        if (config.output == .json) {
-            app_json.writeModelUnavailable(stdout) catch return .internal;
-        } else {
-            try stderr.writeAll("model client unavailable\n");
-        }
+
+    var resolved: ?config_runtime.ResolvedRuntimeConfig = null;
+    defer if (resolved) |*runtime_config| runtime_config.deinit(context.allocator);
+    if (context.io) |io| {
+        resolved = config_runtime.resolve(.{
+            .allocator = context.allocator,
+            .io = io,
+            .env_home = context.env_home,
+            .config = config,
+        }) catch |err| {
+            try writeConfigError(config.output, stdout, stderr, err);
+            return .failure;
+        };
+    }
+
+    var owned_model: ?model_factory.OwnedModelClient = null;
+    defer if (owned_model) |*model_client| model_client.deinit();
+    const model = if (context.model_client) |injected|
+        injected
+    else if (resolved) |runtime_config| blk: {
+        const io = context.io orelse return .internal;
+        owned_model = model_factory.create(.{
+            .allocator = context.allocator,
+            .io = io,
+            .auth_json_path = runtime_config.paths.global_auth,
+            .env = context.env,
+            .model = runtime_config.model,
+        }) catch |err| {
+            try writeModelFactoryError(config.output, stdout, stderr, err, runtime_config.model.provider_id);
+            return .failure;
+        };
+        break :blk owned_model.?.client();
+    } else {
+        try writeModelUnavailable(config.output, stdout, stderr);
         return .failure;
     };
 
+    const effective_config = if (resolved) |runtime_config| runtime_config.effective_run_config else config;
+    const system_prompt = if (resolved) |runtime_config| runtime_config.systemPrompt() else null;
     switch (config.output) {
         .text => {
             var sink = app_text.TextEventSink{ .stdout = stdout, .stderr = stderr };
-            return runWithSink(config, context, model, prompt, sink.sink(), null);
+            return runWithSink(effective_config, context, model, prompt, sink.sink(), null, system_prompt);
         },
         .json => {
             var sink = app_json.JsonEventSink{ .writer = stdout };
-            return runWithSink(config, context, model, prompt, sink.sink(), &sink.session_id);
+            return runWithSink(effective_config, context, model, prompt, sink.sink(), &sink.session_id, system_prompt);
         },
     }
 }
 
 pub fn unsupportedMode(config: args.RunConfig, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !RunStatus {
     const message = switch (config.mode) {
-        .interactive => "interactive mode is not implemented in M6 yet",
-        .rpc => "rpc mode is not implemented in M6 yet",
+        .interactive => "interactive mode is not implemented in M7 yet",
+        .rpc => "rpc mode is not implemented in M7 yet",
         .print => unreachable,
     };
     _ = stdout;
@@ -60,8 +94,9 @@ pub fn unsupportedMode(config: args.RunConfig, stdout: *std.Io.Writer, stderr: *
     return .failure;
 }
 
-fn runWithSink(config: args.RunConfig, context: RuntimeContext, model: agent.ModelClient, prompt: []const u8, sink: agent.AgentEventSink, session_id_target: ?*[]const u8) !RunStatus {
+fn runWithSink(config: args.RunConfig, context: RuntimeContext, model: agent.ModelClient, prompt: []const u8, sink: agent.AgentEventSink, session_id_target: ?*[]const u8, system_prompt: ?[]const u8) !RunStatus {
     var state = agent.AgentState.init(context.allocator, .{
+        .system_prompt = system_prompt,
         .thinking_level = config.thinking_level,
         .max_iterations = config.max_iterations,
     });
@@ -143,6 +178,45 @@ fn runWithSink(config: args.RunConfig, context: RuntimeContext, model: agent.Mod
         else => .failure,
     };
     return .ok;
+}
+
+fn writeModelUnavailable(output: args.OutputMode, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
+    if (output == .json) {
+        app_json.writeModelUnavailable(stdout) catch return error.WriteFailed;
+    } else {
+        try stderr.writeAll("model client unavailable\n");
+    }
+}
+
+fn writeConfigError(output: args.OutputMode, stdout: *std.Io.Writer, stderr: *std.Io.Writer, err: config_runtime.ConfigRuntimeError) !void {
+    const message = switch (err) {
+        error.InvalidSettingsJson => "invalid settings JSON",
+        error.InvalidModelsJson => "invalid models JSON",
+        error.UnknownModel => "unknown model",
+        error.DisabledModel => "selected model is disabled",
+        error.InvalidThinkingLevel => "invalid thinking level in settings",
+        error.ResourceLoadFailed => "failed to load resources",
+        error.OutOfMemory => "out of memory while loading config",
+    };
+    if (output == .json) {
+        app_json.writeError(stdout, "config", message) catch return error.WriteFailed;
+    } else {
+        try stderr.print("{s}\n", .{message});
+    }
+}
+
+fn writeModelFactoryError(output: args.OutputMode, stdout: *std.Io.Writer, stderr: *std.Io.Writer, err: model_factory.ModelFactoryError, provider_id: []const u8) !void {
+    const message = switch (err) {
+        error.UnknownProvider => "unknown provider",
+        error.MissingApiKey => provider.auth.formatMissingKeyMessage(provider.ProviderKind.fromString(provider_id) catch .custom),
+        error.InvalidAuthJson => "invalid auth JSON",
+        error.OutOfMemory => "out of memory while creating model client",
+    };
+    if (output == .json) {
+        app_json.writeError(stdout, "auth", message) catch return error.WriteFailed;
+    } else {
+        try stderr.print("{s}\n", .{message});
+    }
 }
 
 fn resolveWorkspaceRoot(allocator: std.mem.Allocator, maybe_io: ?std.Io, cwd_arg: ?[]const u8) ![]const u8 {

@@ -1,6 +1,6 @@
 # Provider Auth
 
-M1 implements provider-local auth resolution only. Full resource/config hierarchy is deferred to M7.
+Provider auth resolution remains provider-local and deterministic. M7 wires that resolver into app runtime assembly through the resource/config layer, so print and interactive modes can resolve the selected model's provider, auth JSON path, and injected process environment without moving secret handling into `resources`.
 
 ## Source Priority
 
@@ -9,6 +9,12 @@ M1 implements provider-local auth resolution only. Full resource/config hierarch
 3. Injected environment reader
 
 This priority keeps tests deterministic and prevents real local env vars from overriding fixtures.
+
+## M7 Runtime Integration
+
+`resources.settings` and `resources.models` only describe the selected provider/model as data. `app.config_runtime` resolves the global/project resource snapshot, and `app.model_factory` maps the selected model's `provider_id` to `provider.ProviderKind` before calling `provider.auth.resolveApiKey`.
+
+The default auth JSON path comes from `~/.pig/agent/auth.json`. Project settings can select models, but secrets still come only from explicit test config, auth JSON, or the injected environment reader. The resource layer must not read API keys or construct provider clients.
 
 ## Environment Variables
 

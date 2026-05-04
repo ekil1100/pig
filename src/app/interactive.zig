@@ -9,7 +9,29 @@ pub const InteractiveStatus = enum { ok, failure, internal };
 pub const Context = struct {
     allocator: std.mem.Allocator,
     model_client: ?agent.ModelClient = null,
+    system_prompt: ?[]const u8 = null,
+    reload_hook: ?ReloadHook = null,
     size: tui.layout.Size = .{ .width = 80, .height = 24 },
+};
+
+pub const ReloadResult = struct {
+    status: []const u8,
+    system_prompt: ?[]const u8 = null,
+
+    pub fn deinit(self: *ReloadResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.status);
+        if (self.system_prompt) |prompt| allocator.free(prompt);
+        self.* = undefined;
+    }
+};
+
+pub const ReloadHook = struct {
+    ptr: *anyopaque,
+    reload_fn: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator) anyerror!ReloadResult,
+
+    pub fn reload(self: ReloadHook, allocator: std.mem.Allocator) !ReloadResult {
+        return try self.reload_fn(self.ptr, allocator);
+    }
 };
 
 pub const InteractiveEventKind = enum { user, assistant, tool, error_item, status };
@@ -84,6 +106,7 @@ pub const InteractiveApp = struct {
     allocator: std.mem.Allocator,
     editor: tui.editor.EditorState,
     state: agent.AgentState,
+    owned_system_prompt: ?[]const u8 = null,
     transcript: std.ArrayList(TranscriptItem) = .empty,
     size: tui.layout.Size,
     worker: AgentWorker = .{},
@@ -100,6 +123,7 @@ pub const InteractiveApp = struct {
     pub fn deinit(self: *InteractiveApp) void {
         self.editor.deinit();
         self.state.deinit();
+        if (self.owned_system_prompt) |prompt| self.allocator.free(prompt);
         for (self.transcript.items) |*item| item.deinit(self.allocator);
         self.transcript.deinit(self.allocator);
         self.* = undefined;
@@ -127,6 +151,12 @@ pub const InteractiveApp = struct {
         if (self.transcript.items.len == 0) return;
         const last = &self.transcript.items[self.transcript.items.len - 1];
         if (last.kind == .assistant) last.is_streaming = false;
+    }
+
+    fn setSystemPrompt(self: *InteractiveApp, prompt: ?[]const u8) !void {
+        if (self.owned_system_prompt) |old| self.allocator.free(old);
+        self.owned_system_prompt = if (prompt) |value| try self.allocator.dupe(u8, value) else null;
+        self.state.config.system_prompt = self.owned_system_prompt;
     }
 
     pub fn renderFrame(self: *InteractiveApp) !tui.render.Frame {
@@ -157,10 +187,12 @@ pub const InteractiveApp = struct {
 
 pub fn runScript(config: args.RunConfig, context: Context, input_bytes: []const u8, output: *std.Io.Writer) !InteractiveStatus {
     var app = InteractiveApp.init(context.allocator, context.size, .{
+        .system_prompt = context.system_prompt,
         .thinking_level = config.thinking_level,
         .max_iterations = config.max_iterations,
     });
     defer app.deinit();
+    try app.setSystemPrompt(context.system_prompt);
 
     const events = try tui.input.decodeAll(context.allocator, input_bytes);
     defer context.allocator.free(events);
@@ -178,6 +210,11 @@ pub fn runScript(config: args.RunConfig, context: Context, input_bytes: []const 
             },
             .submit => |prompt| {
                 defer app.editor.freeSubmitted(prompt);
+                if (std.mem.eql(u8, std.mem.trim(u8, prompt, " \t\r\n"), "/reload")) {
+                    try handleReload(context, &app);
+                    try renderApp(&app, output);
+                    continue;
+                }
                 try app.appendItem(.user, prompt, false);
                 try renderApp(&app, output);
                 const model = context.model_client orelse {
@@ -191,6 +228,20 @@ pub fn runScript(config: args.RunConfig, context: Context, input_bytes: []const 
         }
     }
     return .ok;
+}
+
+fn handleReload(context: Context, app: *InteractiveApp) !void {
+    const hook = context.reload_hook orelse {
+        try app.appendItem(.status, "resources reload unavailable", false);
+        return;
+    };
+    var result = hook.reload(context.allocator) catch {
+        try app.appendItem(.error_item, "resources reload failed", false);
+        return;
+    };
+    defer result.deinit(context.allocator);
+    if (result.system_prompt) |prompt| try app.setSystemPrompt(prompt);
+    try app.appendItem(.status, result.status, false);
 }
 
 fn runTurn(config: args.RunConfig, context: Context, app: *InteractiveApp, model: agent.ModelClient, prompt: []const u8) !void {

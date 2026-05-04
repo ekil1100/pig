@@ -109,7 +109,7 @@ test "print mode without model client fails clearly" {
 
     try std.testing.expectEqual(cli.ExitCode.failure, code);
     try std.testing.expectEqualStrings("", stdout.written());
-    try std.testing.expect(std.mem.indexOf(u8, stderr.written(), "model client unavailable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr.written(), "missing OpenAI-compatible API key") != null);
 }
 
 test "explicit session fails instead of being ignored when io is unavailable" {

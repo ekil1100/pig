@@ -34,8 +34,11 @@ pub const RunConfig = struct {
     session_mode: SessionMode = .default,
     session_ref: ?[]const u8 = null,
     thinking_level: agent.ThinkingLevel = .off,
+    thinking_overridden: bool = false,
     tools_enabled: bool = true,
+    tools_enabled_overridden: bool = false,
     include_p1_tools: bool = false,
+    include_p1_tools_overridden: bool = false,
     max_iterations: u32 = 8,
 };
 
@@ -89,6 +92,7 @@ pub fn parse(argv: []const []const u8) ParseError!ParsedCommand {
             i += 1;
             if (i >= argv.len) return error.MissingValue;
             config.thinking_level = parseThinking(argv[i]) orelse return error.InvalidValue;
+            config.thinking_overridden = true;
         } else if (std.mem.eql(u8, arg, "--max-iterations")) {
             i += 1;
             if (i >= argv.len) return error.MissingValue;
@@ -96,8 +100,10 @@ pub fn parse(argv: []const []const u8) ParseError!ParsedCommand {
             if (config.max_iterations == 0) return error.InvalidValue;
         } else if (std.mem.eql(u8, arg, "--no-tools")) {
             config.tools_enabled = false;
+            config.tools_enabled_overridden = true;
         } else if (std.mem.eql(u8, arg, "--include-p1-tools")) {
             config.include_p1_tools = true;
+            config.include_p1_tools_overridden = true;
         } else if (std.mem.eql(u8, arg, "--ephemeral")) {
             if (session_seen) return error.InvalidCombination;
             session_seen = true;

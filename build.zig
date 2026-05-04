@@ -74,6 +74,13 @@ pub fn build(b: *std.Build) void {
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/session_entry.zig");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/session_store.zig");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/session_fixtures.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/resources_settings.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/resources_models.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/resources_context_files.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/resources_discovery.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/app_config_runtime.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/model_factory.zig");
+    _ = addPigTest(b, test_step, pig_module, target, optimize, "test/interactive_reload.zig");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/tui_input.zig");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/tui_editor.zig");
     _ = addPigTest(b, test_step, pig_module, target, optimize, "test/tui_layout.zig");
@@ -109,6 +116,17 @@ pub fn build(b: *std.Build) void {
 
     const interactive_mode_step = b.step("interactive-mode", "Run interactive mode tests");
     _ = addPigTest(b, interactive_mode_step, pig_module, target, optimize, "test/interactive_mode.zig");
+    _ = addPigTest(b, interactive_mode_step, pig_module, target, optimize, "test/interactive_reload.zig");
+
+    const resources_step = b.step("resources", "Run resource loading tests");
+    _ = addPigTest(b, resources_step, pig_module, target, optimize, "test/resources_settings.zig");
+    _ = addPigTest(b, resources_step, pig_module, target, optimize, "test/resources_models.zig");
+    _ = addPigTest(b, resources_step, pig_module, target, optimize, "test/resources_context_files.zig");
+    _ = addPigTest(b, resources_step, pig_module, target, optimize, "test/resources_discovery.zig");
+
+    const config_runtime_step = b.step("config-runtime", "Run app config runtime tests");
+    _ = addPigTest(b, config_runtime_step, pig_module, target, optimize, "test/app_config_runtime.zig");
+    _ = addPigTest(b, config_runtime_step, pig_module, target, optimize, "test/model_factory.zig");
 
     const live_module = b.createModule(.{
         .root_source_file = b.path("src/provider/live_smoke.zig"),

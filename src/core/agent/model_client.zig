@@ -27,6 +27,8 @@ pub const ScriptedModelClient = struct {
     request_count: usize = 0,
     last_message_count: usize = 0,
     last_tool_count: usize = 0,
+    last_system_prompt: ?[]const u8 = null,
+    last_system_prompt_buffer: [4096]u8 = undefined,
 
     pub fn client(self: *ScriptedModelClient) ModelClient {
         return .{ .ptr = self, .stream_turn = streamTurn };
@@ -37,6 +39,13 @@ pub const ScriptedModelClient = struct {
         self.request_count += 1;
         self.last_message_count = request.messages.len;
         self.last_tool_count = request.tools.len;
+        if (request.system_prompt) |prompt| {
+            const len = @min(prompt.len, self.last_system_prompt_buffer.len);
+            @memcpy(self.last_system_prompt_buffer[0..len], prompt[0..len]);
+            self.last_system_prompt = self.last_system_prompt_buffer[0..len];
+        } else {
+            self.last_system_prompt = null;
+        }
         if (self.index >= self.turns.len) return error.ProviderFailed;
         const turn = self.turns[self.index];
         self.index += 1;

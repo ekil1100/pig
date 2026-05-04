@@ -1,16 +1,14 @@
-pub const ResourceKind = enum {
-    settings,
-    auth,
-    model_registry,
-    agents_file,
-    skill,
-    prompt_template,
-    theme,
-    package,
-};
+pub const common = @import("common.zig");
+pub const settings = @import("settings.zig");
+pub const models = @import("models.zig");
+pub const context_files = @import("context_files.zig");
+pub const discovery = @import("discovery.zig");
+pub const theme = @import("theme.zig");
+pub const prompts = @import("prompts.zig");
+pub const skills = @import("skills.zig");
 
-pub const ResourceSource = enum {
-    builtin,
-    global,
-    project,
-};
+pub const ResourceKind = common.ResourceKind;
+pub const ResourceSource = common.ResourceSource;
+pub const ResourceSourceInfo = common.ResourceSourceInfo;
+pub const ResourceWarning = common.ResourceWarning;
+pub const ResourceWarningKind = common.ResourceWarningKind;

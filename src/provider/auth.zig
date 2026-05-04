@@ -73,7 +73,10 @@ fn providerJsonKey(kind: types.ProviderKind) []const u8 {
 }
 
 fn readAuthJson(allocator: std.mem.Allocator, io: std.Io, path: []const u8, kind: types.ProviderKind) !?[]u8 {
-    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024));
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return error.InvalidAuthJson,
+    };
     defer allocator.free(bytes);
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, bytes, .{}) catch return error.InvalidAuthJson;
     defer parsed.deinit();

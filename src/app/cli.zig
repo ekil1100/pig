@@ -2,8 +2,11 @@ const std = @import("std");
 const agent = @import("../core/agent/mod.zig");
 const parsed_args = @import("args.zig");
 const build_info = @import("build_info.zig");
+const config_runtime = @import("config_runtime.zig");
 const app_interactive = @import("interactive.zig");
+const model_factory = @import("model_factory.zig");
 const app_runtime = @import("runtime.zig");
+const provider = @import("../provider/mod.zig");
 const paths = @import("../util/paths.zig");
 const tui = @import("../tui/mod.zig");
 
@@ -19,6 +22,7 @@ pub const Context = struct {
     io: ?std.Io = null,
     env_home: ?[]const u8 = null,
     env_tmpdir: ?[]const u8 = null,
+    env: ?provider.auth.EnvReader = null,
     model_client: ?agent.ModelClient = null,
     interactive_input: ?[]const u8 = null,
     terminal_size: tui.layout.Size = .{ .width = 80, .height = 24 },
@@ -57,6 +61,7 @@ pub fn runWithContext(args: []const []const u8, context: Context, stdout: anytyp
                 .allocator = context.allocator,
                 .io = context.io,
                 .env_home = context.env_home,
+                .env = context.env,
                 .model_client = context.model_client,
             }, stdout, stderr),
             .interactive => try runInteractive(config, context, stdout, stderr),
@@ -67,7 +72,7 @@ pub fn runWithContext(args: []const []const u8, context: Context, stdout: anytyp
 
 fn writeHelp(writer: anytype) !void {
     try writer.writeAll(
-        \\Pig v1.0 M6
+        \\Pig v1.0 M7
         \\
         \\Usage:
         \\  pig --version
@@ -88,7 +93,7 @@ fn writeHelp(writer: anytype) !void {
         \\  --include-p1-tools      Include grep/find/ls in addition to P0 tools
         \\  --ephemeral             Do not attach the run to a saved session
         \\
-        \\M6 wires product-mode dispatch, print/json, and interactive TUI foundation.
+        \\M7 adds config/auth/models/resources loading on top of terminal UI foundation.
         \\RPC serving remains exposed as a mode skeleton.
         \\
     );
@@ -117,17 +122,59 @@ fn mapRunStatus(status: app_runtime.RunStatus) ExitCode {
 
 fn runInteractive(config: parsed_args.RunConfig, context: Context, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !app_runtime.RunStatus {
     if (config.output == .json) return .usage;
-    if (context.model_client == null) {
+    if (context.model_client == null and context.io == null) {
         try stderr.writeAll("model client unavailable\n");
         return .failure;
     }
     const input = context.interactive_input orelse {
-        try stderr.writeAll("interactive terminal input is not wired in this M6 build\n");
+        try stderr.writeAll("interactive terminal input is not wired in this M7 build\n");
         return .failure;
     };
-    const status = try app_interactive.runScript(config, .{
+
+    var resolved: ?config_runtime.ResolvedRuntimeConfig = null;
+    defer if (resolved) |*runtime_config| runtime_config.deinit(context.allocator);
+    if (context.io) |io| {
+        resolved = config_runtime.resolve(.{
+            .allocator = context.allocator,
+            .io = io,
+            .env_home = context.env_home,
+            .config = config,
+        }) catch |err| {
+            try stderr.print("{s}\n", .{@errorName(err)});
+            return .failure;
+        };
+    }
+
+    var owned_model: ?model_factory.OwnedModelClient = null;
+    defer if (owned_model) |*client| client.deinit();
+    const model = if (context.model_client) |injected|
+        injected
+    else if (resolved) |runtime_config| blk: {
+        const io = context.io orelse return .internal;
+        owned_model = model_factory.create(.{
+            .allocator = context.allocator,
+            .io = io,
+            .auth_json_path = runtime_config.paths.global_auth,
+            .env = context.env,
+            .model = runtime_config.model,
+        }) catch |err| {
+            try stderr.print("{s}\n", .{@errorName(err)});
+            return .failure;
+        };
+        break :blk owned_model.?.client();
+    } else {
+        try stderr.writeAll("model client unavailable\n");
+        return .failure;
+    };
+
+    var reload_context = ReloadContext{ .cli_context = context, .config = config };
+    const reload_hook = app_interactive.ReloadHook{ .ptr = &reload_context, .reload_fn = ReloadContext.reload };
+    const effective_config = if (resolved) |runtime_config| runtime_config.effective_run_config else config;
+    const status = try app_interactive.runScript(effective_config, .{
         .allocator = context.allocator,
-        .model_client = context.model_client,
+        .model_client = model,
+        .system_prompt = if (resolved) |runtime_config| runtime_config.systemPrompt() else null,
+        .reload_hook = if (context.io != null) reload_hook else null,
         .size = context.terminal_size,
     }, input, stdout);
     return switch (status) {
@@ -136,6 +183,31 @@ fn runInteractive(config: parsed_args.RunConfig, context: Context, stdout: *std.
         .internal => .internal,
     };
 }
+
+const ReloadContext = struct {
+    cli_context: Context,
+    config: parsed_args.RunConfig,
+
+    fn reload(ptr: *anyopaque, allocator: std.mem.Allocator) anyerror!app_interactive.ReloadResult {
+        const self: *ReloadContext = @ptrCast(@alignCast(ptr));
+        const io = self.cli_context.io orelse return error.MissingIo;
+        var resolved = try config_runtime.resolve(.{
+            .allocator = allocator,
+            .io = io,
+            .env_home = self.cli_context.env_home,
+            .config = self.config,
+        });
+        defer resolved.deinit(allocator);
+        const status = try std.fmt.allocPrint(allocator, "resources reloaded: {d} context files, {d} models, {d} warnings", .{
+            resolved.snapshot.context.files.items.len,
+            resolved.snapshot.models.entries.items.len,
+            resolved.snapshot.warnings.items.len,
+        });
+        errdefer allocator.free(status);
+        const prompt = if (resolved.systemPrompt()) |system_prompt| try allocator.dupe(u8, system_prompt) else null;
+        return .{ .status = status, .system_prompt = prompt };
+    }
+};
 
 fn resolveRuntimePaths(context: Context) !paths.PathSet {
     const cwd_path = if (context.io) |io|
@@ -168,7 +240,7 @@ fn writeDoctor(context: Context, writer: anytype) !void {
     const set = try resolveRuntimePaths(context);
     defer set.deinit(context.allocator);
 
-    try writer.writeAll("Pig doctor (M6)\n");
+    try writer.writeAll("Pig doctor (M7)\n");
     try writer.print("cwd: ok {s}\n", .{set.cwd});
     if (context.env_home) |home| {
         try writer.print("home: ok {s}\n", .{home});
@@ -184,6 +256,23 @@ fn writeDoctor(context: Context, writer: anytype) !void {
 
     const temp_status = if (context.io) |io| tempDirStatus(io, context.env_tmpdir) else "unknown";
     try writer.print("temp_dir: {s}\n", .{temp_status});
+
+    if (context.io) |io| {
+        const config = parsed_args.RunConfig{ .mode = .print, .prompt = "" };
+        var resolved = config_runtime.resolve(.{
+            .allocator = context.allocator,
+            .io = io,
+            .env_home = context.env_home,
+            .config = config,
+        }) catch |err| {
+            try writer.print("resources: error {s}\n", .{@errorName(err)});
+            return;
+        };
+        defer resolved.deinit(context.allocator);
+        try writer.print("models: ok {d} enabled\n", .{resolved.snapshot.models.entries.items.len});
+        try writer.print("context: ok {d} files {d} bytes\n", .{ resolved.snapshot.context.files.items.len, resolved.snapshot.context.total_bytes });
+        try writer.print("resources: warnings {d}\n", .{resolved.snapshot.warnings.items.len});
+    }
 }
 
 fn fixtureStatus(io: std.Io) []const u8 {
