@@ -210,6 +210,7 @@ fn writeModelFactoryError(output: args.OutputMode, stdout: *std.Io.Writer, stder
         error.UnknownProvider => "unknown provider",
         error.MissingApiKey => provider.auth.formatMissingKeyMessage(provider.ProviderKind.fromString(provider_id) catch .custom),
         error.InvalidAuthJson => "invalid auth JSON",
+        error.UnsupportedTransport => "provider live transport is not implemented for this provider",
         error.OutOfMemory => "out of memory while creating model client",
     };
     if (output == .json) {

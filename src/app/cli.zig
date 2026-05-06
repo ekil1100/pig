@@ -7,6 +7,7 @@ const app_interactive = @import("interactive.zig");
 const model_factory = @import("model_factory.zig");
 const app_runtime = @import("runtime.zig");
 const provider = @import("../provider/mod.zig");
+const resources = @import("../resources/mod.zig");
 const paths = @import("../util/paths.zig");
 const tui = @import("../tui/mod.zig");
 
@@ -148,6 +149,14 @@ fn runInteractive(config: parsed_args.RunConfig, context: Context, stdout: *std.
     const scripted = context.interactive_input != null;
     var initial_status: ?[]u8 = null;
     defer if (initial_status) |status| context.allocator.free(status);
+    var model_status: ?[]u8 = null;
+    defer if (model_status) |status| context.allocator.free(status);
+    var scoped_models_status: ?[]u8 = null;
+    defer if (scoped_models_status) |status| context.allocator.free(status);
+    if (resolved) |runtime_config| {
+        model_status = try formatCurrentModel(context.allocator, runtime_config);
+        scoped_models_status = try formatScopedModels(context.allocator, runtime_config);
+    }
     const model: ?agent.ModelClient = if (context.model_client) |injected|
         injected
     else if (resolved) |runtime_config| blk: {
@@ -178,14 +187,20 @@ fn runInteractive(config: parsed_args.RunConfig, context: Context, stdout: *std.
 
     var reload_context = ReloadContext{ .cli_context = context, .config = config };
     const reload_hook = app_interactive.ReloadHook{ .ptr = &reload_context, .reload_fn = ReloadContext.reload };
+    var model_switch_context = ModelSwitchContext{ .cli_context = context, .config = config };
+    defer model_switch_context.deinit();
+    const model_switch_hook = app_interactive.ModelSwitchHook{ .ptr = &model_switch_context, .select_fn = ModelSwitchContext.select };
     const effective_config = if (resolved) |runtime_config| runtime_config.effective_run_config else config;
     const interactive_context = app_interactive.Context{
         .allocator = context.allocator,
         .model_client = model,
         .system_prompt = if (resolved) |runtime_config| runtime_config.systemPrompt() else null,
         .reload_hook = if (context.io != null) reload_hook else null,
+        .model_switch_hook = if (context.io != null) model_switch_hook else null,
         .size = context.terminal_size,
         .initial_status = initial_status,
+        .model_status = model_status,
+        .scoped_models_status = scoped_models_status,
         .recover_missing_model = !scripted,
     };
     const status = if (context.interactive_input) |input|
@@ -227,6 +242,113 @@ const ReloadContext = struct {
         return .{ .status = status, .system_prompt = prompt };
     }
 };
+
+const ModelSwitchContext = struct {
+    cli_context: Context,
+    config: parsed_args.RunConfig,
+    owned_model: ?model_factory.OwnedModelClient = null,
+
+    fn deinit(self: *ModelSwitchContext) void {
+        if (self.owned_model) |*client| client.deinit();
+        self.* = undefined;
+    }
+
+    fn select(ptr: *anyopaque, allocator: std.mem.Allocator, model_id: []const u8) anyerror!app_interactive.ModelSwitchResult {
+        const self: *ModelSwitchContext = @ptrCast(@alignCast(ptr));
+        const io = self.cli_context.io orelse return error.MissingIo;
+        var next_config = self.config;
+        next_config.model = model_id;
+        var resolved = try config_runtime.resolve(.{
+            .allocator = allocator,
+            .io = io,
+            .env_home = self.cli_context.env_home,
+            .config = next_config,
+        });
+        defer resolved.deinit(allocator);
+
+        const model_status = try formatCurrentModel(allocator, resolved);
+        errdefer allocator.free(model_status);
+        const scoped_models_status = try formatScopedModels(allocator, resolved);
+        errdefer allocator.free(scoped_models_status);
+
+        var created = model_factory.create(.{
+            .allocator = allocator,
+            .io = io,
+            .auth_json_path = resolved.paths.global_auth,
+            .env = self.cli_context.env,
+            .model = resolved.model,
+        }) catch |err| {
+            const status = try std.fmt.allocPrint(allocator, "model selected: {s} (model unavailable: {s})", .{ resolved.model.id, @errorName(err) });
+            errdefer allocator.free(status);
+            return .{
+                .status = status,
+                .model_status = model_status,
+                .scoped_models_status = scoped_models_status,
+                .clear_model_client = true,
+            };
+        };
+        errdefer created.deinit();
+
+        const status = try std.fmt.allocPrint(allocator, "model selected: {s}", .{resolved.model.id});
+        errdefer allocator.free(status);
+        if (self.owned_model) |*old| old.deinit();
+        self.owned_model = created;
+        const client = if (self.owned_model) |*owned| owned.client() else unreachable;
+        return .{
+            .status = status,
+            .model_status = model_status,
+            .scoped_models_status = scoped_models_status,
+            .model_client = client,
+        };
+    }
+};
+
+fn formatCurrentModel(allocator: std.mem.Allocator, runtime_config: config_runtime.ResolvedRuntimeConfig) ![]u8 {
+    return try std.fmt.allocPrint(allocator,
+        \\current model:
+        \\  id: {s}
+        \\  display: {s}
+        \\  provider: {s}
+        \\  provider model: {s}
+        \\  scope: {s}
+    , .{
+        runtime_config.model.id,
+        runtime_config.model.display_name,
+        runtime_config.model.provider_id,
+        runtime_config.model.model,
+        modelScopeName(runtime_config.model.scope),
+    });
+}
+
+fn formatScopedModels(allocator: std.mem.Allocator, runtime_config: config_runtime.ResolvedRuntimeConfig) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    try out.writer.writeAll("available models:\n");
+    for (runtime_config.snapshot.models.entries.items) |entry| {
+        const marker = if (std.mem.eql(u8, entry.id, runtime_config.model.id)) "*" else " ";
+        const enabled = if (entry.enabled) "enabled" else "disabled";
+        try out.writer.print("{s} {s} ({s}, {s}, {s})\n", .{
+            marker,
+            entry.id,
+            entry.provider_id,
+            modelScopeName(entry.scope),
+            enabled,
+        });
+    }
+    if (runtime_config.snapshot.models.warnings.items.len > 0) {
+        try out.writer.print("warnings: {d}\n", .{runtime_config.snapshot.models.warnings.items.len});
+    }
+    return try out.toOwnedSlice();
+}
+
+fn modelScopeName(scope: resources.models.ModelScope) []const u8 {
+    return switch (scope) {
+        .builtin => "builtin",
+        .global => "global",
+        .project => "project",
+        .transient => "transient",
+    };
+}
 
 fn resolveRuntimePaths(context: Context) !paths.PathSet {
     const cwd_path = if (context.io) |io|

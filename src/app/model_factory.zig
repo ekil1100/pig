@@ -8,6 +8,7 @@ pub const ModelFactoryError = error{
     UnknownProvider,
     MissingApiKey,
     InvalidAuthJson,
+    UnsupportedTransport,
 };
 
 const EmptyEnv = struct {
@@ -36,7 +37,7 @@ pub const OwnedModelClient = struct {
     api_key: []const u8,
     base_url: []const u8,
     model: []const u8,
-    unsupported_transport: provider.transport.UnsupportedTransport = .{},
+    http_transport: provider.transport.HttpTransport,
 
     pub fn deinit(self: *OwnedModelClient) void {
         self.allocator.free(self.api_key);
@@ -60,8 +61,17 @@ pub const OwnedModelClient = struct {
                     .thinking = self.thinkingOptions(request.thinking_level),
                 }, request.messages) catch return error.OutOfMemory;
                 defer provider_request.deinit(self.allocator);
-                var transport = self.unsupported_transport.transport();
-                const stream = transport.sendStreaming(provider_request) catch return error.ProviderFailed;
+                var transport = self.http_transport.transport();
+                const stream = transport.sendStreaming(provider_request) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => {
+                        sink.emit(.{ .error_event = .{ .category = .transport, .message = "provider request failed", .retryable = true } }) catch |sink_err| switch (sink_err) {
+                            error.OutOfMemory => return error.OutOfMemory,
+                            error.SinkRejectedEvent => return error.SinkRejectedEvent,
+                        };
+                        return error.ProviderFailed;
+                    },
+                };
                 provider.openai_compatible.parseStream(self.allocator, stream, sink) catch |err| return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
                     error.SinkRejectedEvent => error.SinkRejectedEvent,
@@ -82,6 +92,10 @@ pub const OwnedModelClient = struct {
 
 pub fn create(options: CreateOptions) ModelFactoryError!OwnedModelClient {
     const kind = provider.ProviderKind.fromString(options.model.provider_id) catch return error.UnknownProvider;
+    switch (kind) {
+        .openai_compatible, .openrouter, .deepseek, .custom => {},
+        else => return error.UnsupportedTransport,
+    }
     var empty = EmptyEnv{};
     const env = options.env orelse empty.reader();
     const api_key = provider.auth.resolveApiKey(options.allocator, .{
@@ -105,5 +119,5 @@ pub fn create(options: CreateOptions) ModelFactoryError!OwnedModelClient {
     const base_url = try options.allocator.dupe(u8, options.model.base_url orelse base_url_default);
     errdefer options.allocator.free(base_url);
     const model = try options.allocator.dupe(u8, options.model.model);
-    return .{ .allocator = options.allocator, .provider_kind = kind, .api_key = api_key, .base_url = base_url, .model = model };
+    return .{ .allocator = options.allocator, .provider_kind = kind, .api_key = api_key, .base_url = base_url, .model = model, .http_transport = .{ .allocator = options.allocator, .io = options.io } };
 }

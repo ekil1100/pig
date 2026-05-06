@@ -3,6 +3,7 @@ pub const build_info = @import("build_info.zig");
 pub const args = @import("args.zig");
 pub const runtime = @import("runtime.zig");
 pub const interactive = @import("interactive.zig");
+pub const commands = @import("commands.zig");
 pub const config_runtime = @import("config_runtime.zig");
 pub const model_factory = @import("model_factory.zig");
 pub const output_text = @import("output_text.zig");

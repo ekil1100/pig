@@ -28,10 +28,10 @@ Behavior:
 
 - `PIG_PROVIDER_LIVE != 1`: skipped, exit 0
 - live enabled but required env missing: skipped with missing variable names, exit 0
-- env complete but live transport unsupported: nonzero diagnostic
+- env complete: sends one OpenAI-compatible streamed chat completion request and validates a clean `done` event
 - provider/API failure: nonzero diagnostic without API key
 
-M1 currently keeps live transport behind this harness so default development stays deterministic.
+Default test and smoke steps still stay deterministic because the live harness is opt-in.
 
 
 ## M1 Request Builder Limits
@@ -44,4 +44,6 @@ OpenAI-compatible assistant tool-call history can replay `reasoning_content` fro
 
 ## Live Transport Status
 
-M1 includes the `provider-live` harness and unsupported-transport diagnostic. Actual stdlib HTTP or curl live streaming transport is deferred unless explicitly prioritized later.
+Pig includes a stdlib HTTP streaming transport for OpenAI-compatible providers. The transport owns the HTTP client/request/response stream for the lifetime of parser consumption, requests identity encoding, and exposes raw SSE bytes through `ResponseStream`.
+
+The current live path is enabled for OpenAI-compatible provider families, including DeepSeek, OpenRouter, and custom OpenAI-compatible endpoints. Non-OpenAI provider transports remain unsupported until their request builders and stream parsers are wired into the same boundary.

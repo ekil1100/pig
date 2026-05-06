@@ -42,7 +42,53 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
-    try stderr.writeAll("provider-live: live transport unsupported on this platform/build\n");
-    try stderr.flush();
-    std.process.exit(1);
+    const allocator = init.gpa;
+    const blocks = [_]pig.provider.ContentBlockView{.{ .text = .{ .text = "Reply with exactly: pig-live-ok" } }};
+    const messages = [_]pig.provider.MessageView{.{ .role = .user, .content = &blocks }};
+    var request = try pig.provider.openai_compatible.buildChatCompletionsRequest(allocator, .{
+        .base_url = env.reader().get("PIG_OPENAI_COMPAT_BASE_URL").?,
+        .api_key = env.reader().get("PIG_OPENAI_COMPAT_API_KEY").?,
+        .model = env.reader().get("PIG_OPENAI_COMPAT_MODEL").?,
+    }, &messages);
+    defer request.deinit(allocator);
+
+    var http_transport = pig.provider.transport.HttpTransport{ .allocator = allocator, .io = io };
+    var transport = http_transport.transport();
+    const stream = transport.sendStreaming(request) catch |err| {
+        try stderr.print("provider-live: request failed: {s}\n", .{@errorName(err)});
+        try stderr.flush();
+        std.process.exit(1);
+    };
+    var sink_state = SmokeSink{};
+    pig.provider.openai_compatible.parseStream(allocator, stream, sink_state.sink()) catch |err| {
+        try stderr.print("provider-live: stream parse failed: {s}\n", .{@errorName(err)});
+        try stderr.flush();
+        std.process.exit(1);
+    };
+    if (!sink_state.done or sink_state.error_count > 0) {
+        try stderr.writeAll("provider-live: stream ended without a clean done event\n");
+        try stderr.flush();
+        std.process.exit(1);
+    }
+    try stdout.print("provider-live: ok text_chunks={d}\n", .{sink_state.text_count});
 }
+
+const SmokeSink = struct {
+    text_count: usize = 0,
+    error_count: usize = 0,
+    done: bool = false,
+
+    fn sink(self: *SmokeSink) pig.provider.EventSink {
+        return .{ .ptr = self, .on_event = onEvent };
+    }
+
+    fn onEvent(ptr: *anyopaque, event: pig.provider.ProviderEvent) pig.provider.EventSinkError!void {
+        const self: *SmokeSink = @ptrCast(@alignCast(ptr));
+        switch (event) {
+            .text_delta => self.text_count += 1,
+            .error_event => self.error_count += 1,
+            .done => self.done = true,
+            else => {},
+        }
+    }
+};

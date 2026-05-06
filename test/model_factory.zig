@@ -48,3 +48,22 @@ test "model factory creates deepseek openai-compatible client" {
     try std.testing.expectEqualStrings("https://api.deepseek.com", client.base_url);
     try std.testing.expectEqualStrings("deepseek-v4-flash", client.model);
 }
+
+test "model factory reports unsupported non-openai live providers" {
+    var entry = pig.resources.models.ModelEntry{
+        .id = try std.testing.allocator.dupe(u8, "anthropic-test"),
+        .provider_id = try std.testing.allocator.dupe(u8, "anthropic"),
+        .display_name = try std.testing.allocator.dupe(u8, "Anthropic Test"),
+        .model = try std.testing.allocator.dupe(u8, "claude-test"),
+        .base_url = null,
+        .source = try pig.resources.common.ResourceSourceInfo.clone(std.testing.allocator, .builtin, "test", 0),
+    };
+    defer entry.deinit(std.testing.allocator);
+
+    try std.testing.expectError(error.UnsupportedTransport, pig.app.model_factory.create(.{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .auth_json_path = "missing-auth.json",
+        .model = entry,
+    }));
+}

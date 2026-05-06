@@ -1,5 +1,6 @@
 const std = @import("std");
 const args = @import("args.zig");
+const commands = @import("commands.zig");
 const agent = @import("../core/agent/mod.zig");
 const provider = @import("../provider/mod.zig");
 const tui = @import("../tui/mod.zig");
@@ -11,8 +12,11 @@ pub const Context = struct {
     model_client: ?agent.ModelClient = null,
     system_prompt: ?[]const u8 = null,
     reload_hook: ?ReloadHook = null,
+    model_switch_hook: ?ModelSwitchHook = null,
     size: tui.layout.Size = .{ .width = 80, .height = 24 },
     initial_status: ?[]const u8 = null,
+    model_status: ?[]const u8 = null,
+    scoped_models_status: ?[]const u8 = null,
     recover_missing_model: bool = false,
 };
 
@@ -33,6 +37,30 @@ pub const ReloadHook = struct {
 
     pub fn reload(self: ReloadHook, allocator: std.mem.Allocator) !ReloadResult {
         return try self.reload_fn(self.ptr, allocator);
+    }
+};
+
+pub const ModelSwitchResult = struct {
+    status: []const u8,
+    model_status: ?[]const u8 = null,
+    scoped_models_status: ?[]const u8 = null,
+    model_client: ?agent.ModelClient = null,
+    clear_model_client: bool = false,
+
+    pub fn deinit(self: *ModelSwitchResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.status);
+        if (self.model_status) |status| allocator.free(status);
+        if (self.scoped_models_status) |status| allocator.free(status);
+        self.* = undefined;
+    }
+};
+
+pub const ModelSwitchHook = struct {
+    ptr: *anyopaque,
+    select_fn: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator, model_id: []const u8) anyerror!ModelSwitchResult,
+
+    pub fn select(self: ModelSwitchHook, allocator: std.mem.Allocator, model_id: []const u8) !ModelSwitchResult {
+        return try self.select_fn(self.ptr, allocator, model_id);
     }
 };
 
@@ -145,6 +173,9 @@ pub const InteractiveApp = struct {
     editor: tui.editor.EditorState,
     state: agent.AgentState,
     owned_system_prompt: ?[]const u8 = null,
+    model_client: ?agent.ModelClient = null,
+    model_status: std.ArrayList(u8) = .empty,
+    scoped_models_status: std.ArrayList(u8) = .empty,
     transcript: std.ArrayList(TranscriptItem) = .empty,
     size: tui.layout.Size,
     worker: AgentWorker = .{},
@@ -162,6 +193,8 @@ pub const InteractiveApp = struct {
         self.editor.deinit();
         self.state.deinit();
         if (self.owned_system_prompt) |prompt| self.allocator.free(prompt);
+        self.model_status.deinit(self.allocator);
+        self.scoped_models_status.deinit(self.allocator);
         for (self.transcript.items) |*item| item.deinit(self.allocator);
         self.transcript.deinit(self.allocator);
         self.* = undefined;
@@ -197,6 +230,13 @@ pub const InteractiveApp = struct {
         self.state.config.system_prompt = self.owned_system_prompt;
     }
 
+    fn setModelInfo(self: *InteractiveApp, model_status: ?[]const u8, scoped_models_status: ?[]const u8) !void {
+        self.model_status.clearRetainingCapacity();
+        self.scoped_models_status.clearRetainingCapacity();
+        if (model_status) |status| try self.model_status.appendSlice(self.allocator, status);
+        if (scoped_models_status) |status| try self.scoped_models_status.appendSlice(self.allocator, status);
+    }
+
     pub fn renderFrame(self: *InteractiveApp) !tui.render.Frame {
         var frame = tui.render.Frame.init(self.allocator, self.size);
         errdefer frame.deinit();
@@ -230,7 +270,9 @@ pub fn runScript(config: args.RunConfig, context: Context, input_bytes: []const 
         .max_iterations = config.max_iterations,
     });
     defer app.deinit();
+    app.model_client = context.model_client;
     try app.setSystemPrompt(context.system_prompt);
+    try app.setModelInfo(context.model_status, context.scoped_models_status);
     if (context.initial_status) |status| try app.appendItem(.status, status, false);
 
     const events = try tui.input.decodeAll(context.allocator, input_bytes);
@@ -256,7 +298,9 @@ pub fn runLive(config: args.RunConfig, context: Context, io: std.Io, output: *st
         .max_iterations = config.max_iterations,
     });
     defer app.deinit();
+    app.model_client = context.model_client;
     try app.setSystemPrompt(context.system_prompt);
+    try app.setModelInfo(context.model_status, context.scoped_models_status);
     if (context.initial_status) |status| try app.appendItem(.status, status, false);
 
     var session = tui.terminal.TerminalSession{ .size = context.size };
@@ -356,25 +400,31 @@ fn handleLiveInputEvent(config: args.RunConfig, context: Context, app: *Interact
         .submit => |prompt| {
             var prompt_owned = true;
             defer if (prompt_owned) app.editor.freeSubmitted(prompt);
-            if (std.mem.eql(u8, std.mem.trim(u8, prompt, " \t\r\n"), "/reload")) {
-                try handleReload(context, app);
+            if (commands.isCommandInput(prompt)) {
+                const command_status = try handleCommand(context, app, prompt, active_turn);
                 try renderApp(app, output);
-                return .continue_loop;
+                return command_status;
             }
             if (active_turn.* != null) {
                 try app.appendItem(.status, "turn already running", false);
                 try renderApp(app, output);
                 return .continue_loop;
             }
-            try app.appendItem(.user, prompt, false);
+            var model_prompt = try prepareSubmittedPrompt(context.allocator, prompt);
+            defer model_prompt.deinit(context.allocator);
+            try app.appendItem(.user, model_prompt.text, false);
             try renderApp(app, output);
-            const model = context.model_client orelse {
+            const model = app.model_client orelse {
                 try app.appendItem(.error_item, "model client unavailable", false);
                 try renderApp(app, output);
                 return if (context.recover_missing_model) .continue_loop else .failure;
             };
-            active_turn.* = try ActiveTurn.start(config, context, app, model, prompt);
-            prompt_owned = false;
+            active_turn.* = try ActiveTurn.start(config, context, app, model, model_prompt.text);
+            if (model_prompt.owned) {
+                model_prompt.owned = false;
+            } else {
+                prompt_owned = false;
+            }
         },
     }
     return .continue_loop;
@@ -392,23 +442,43 @@ fn handleInputEvent(config: args.RunConfig, context: Context, app: *InteractiveA
         },
         .submit => |prompt| {
             defer app.editor.freeSubmitted(prompt);
-            if (std.mem.eql(u8, std.mem.trim(u8, prompt, " \t\r\n"), "/reload")) {
-                try handleReload(context, app);
+            if (commands.isCommandInput(prompt)) {
+                const command_status = try handleCommand(context, app, prompt, null);
                 try renderApp(app, output);
-                return .continue_loop;
+                return command_status;
             }
-            try app.appendItem(.user, prompt, false);
+            var model_prompt = try prepareSubmittedPrompt(context.allocator, prompt);
+            defer model_prompt.deinit(context.allocator);
+            try app.appendItem(.user, model_prompt.text, false);
             try renderApp(app, output);
-            const model = context.model_client orelse {
+            const model = app.model_client orelse {
                 try app.appendItem(.error_item, "model client unavailable", false);
                 try renderApp(app, output);
                 return if (context.recover_missing_model) .continue_loop else .failure;
             };
-            try runTurn(config, context, app, model, prompt);
+            try runTurn(config, context, app, model, model_prompt.text);
             try renderApp(app, output);
         },
     }
     return .continue_loop;
+}
+
+const PreparedPrompt = struct {
+    text: []const u8,
+    owned: bool = false,
+
+    fn deinit(self: *PreparedPrompt, allocator: std.mem.Allocator) void {
+        if (self.owned) allocator.free(self.text);
+        self.* = undefined;
+    }
+};
+
+fn prepareSubmittedPrompt(allocator: std.mem.Allocator, prompt: []const u8) !PreparedPrompt {
+    const trimmed = std.mem.trim(u8, prompt, " \t\r\n");
+    if (std.mem.startsWith(u8, trimmed, "//")) {
+        return .{ .text = try allocator.dupe(u8, trimmed[1..]), .owned = true };
+    }
+    return .{ .text = prompt };
 }
 
 const ActiveTurn = struct {
@@ -563,6 +633,92 @@ fn handleReload(context: Context, app: *InteractiveApp) !void {
     };
     defer result.deinit(context.allocator);
     if (result.system_prompt) |prompt| try app.setSystemPrompt(prompt);
+    try app.appendItem(.status, result.status, false);
+}
+
+fn handleCommand(context: Context, app: *InteractiveApp, prompt: []const u8, active_turn: ?*?*ActiveTurn) !InputStatus {
+    var parsed = commands.parse(context.allocator, prompt) catch |err| {
+        try app.appendItem(.error_item, commands.formatParseError(err), false);
+        return .continue_loop;
+    };
+    defer parsed.deinit();
+
+    const spec = commands.lookup(parsed.name) orelse {
+        const message = try commands.formatUnknownCommand(context.allocator, parsed.name);
+        defer context.allocator.free(message);
+        try app.appendItem(.error_item, message, false);
+        return .continue_loop;
+    };
+
+    if (active_turn) |turn_slot| {
+        if (turn_slot.* != null and !spec.available_when_busy) {
+            try app.appendItem(.status, "command unavailable while turn is running", false);
+            return .continue_loop;
+        }
+    }
+
+    switch (spec.kind) {
+        .reload => try handleReload(context, app),
+        .model => {
+            if (parsed.argv.len > 0) {
+                try handleModelSwitch(context, app, parsed.argv[0]);
+            } else if (app.model_status.items.len > 0) {
+                try app.appendItem(.status, app.model_status.items, false);
+            } else {
+                try app.appendItem(.status, "model info unavailable", false);
+            }
+        },
+        .scoped_models => {
+            if (app.scoped_models_status.items.len > 0) {
+                try app.appendItem(.status, app.scoped_models_status.items, false);
+            } else {
+                try app.appendItem(.status, "scoped model info unavailable", false);
+            }
+        },
+        .hotkeys => {
+            const text = try commands.formatHotkeys(context.allocator);
+            defer context.allocator.free(text);
+            try app.appendItem(.status, text, false);
+        },
+        .quit, .exit => {
+            if (active_turn) |turn_slot| {
+                if (turn_slot.*) |turn| {
+                    turn.requestAbort();
+                    try app.appendItem(.status, "abort requested", false);
+                    return .continue_loop;
+                }
+            }
+            return .exit_ok;
+        },
+        .changelog => try app.appendItem(.status, "Pig v1.0 M8: slash commands, workflow features, session tree navigation, and compaction foundation", false),
+        else => {
+            const message = try std.fmt.allocPrint(context.allocator, "command not implemented yet: /{s}", .{spec.name});
+            defer context.allocator.free(message);
+            try app.appendItem(.status, message, false);
+        },
+    }
+    return .continue_loop;
+}
+
+fn handleModelSwitch(context: Context, app: *InteractiveApp, model_id: []const u8) !void {
+    const hook = context.model_switch_hook orelse {
+        try app.appendItem(.status, "model switching unavailable", false);
+        return;
+    };
+    var result = hook.select(context.allocator, model_id) catch |err| {
+        const message = try std.fmt.allocPrint(context.allocator, "model switch failed: {s}", .{@errorName(err)});
+        defer context.allocator.free(message);
+        try app.appendItem(.error_item, message, false);
+        return;
+    };
+    defer result.deinit(context.allocator);
+
+    if (result.model_client) |client| {
+        app.model_client = client;
+    } else if (result.clear_model_client) {
+        app.model_client = null;
+    }
+    try app.setModelInfo(result.model_status, result.scoped_models_status);
     try app.appendItem(.status, result.status, false);
 }
 
