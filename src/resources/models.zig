@@ -59,6 +59,13 @@ pub const Registry = struct {
         for (self.entries.items) |*entry| if (std.mem.eql(u8, entry.id, id)) return entry;
         return null;
     }
+
+    pub fn findDefaultForProvider(self: *const Registry, provider_id: []const u8) ?*const ModelEntry {
+        for (self.entries.items) |*entry| {
+            if (entry.enabled and std.mem.eql(u8, entry.provider_id, provider_id)) return entry;
+        }
+        return null;
+    }
 };
 
 pub fn loadRegistry(allocator: std.mem.Allocator, io: std.Io, global_path: []const u8, project_path: []const u8) !Registry {
@@ -71,20 +78,51 @@ pub fn loadRegistry(allocator: std.mem.Allocator, io: std.Io, global_path: []con
 }
 
 fn addBuiltin(allocator: std.mem.Allocator, registry: *Registry) !void {
+    try addBuiltinEntry(allocator, registry, .{
+        .id = "gpt-4.1-mini",
+        .provider_id = "openai_compatible",
+        .display_name = "GPT-4.1 Mini",
+        .model = "gpt-4.1-mini",
+        .base_url = "https://api.openai.com/v1",
+    });
+    try addBuiltinEntry(allocator, registry, .{
+        .id = "deepseek-v4-flash",
+        .provider_id = "deepseek",
+        .display_name = "DeepSeek V4 Flash",
+        .model = "deepseek-v4-flash",
+        .base_url = "https://api.deepseek.com",
+    });
+    try addBuiltinEntry(allocator, registry, .{
+        .id = "deepseek-v4-pro",
+        .provider_id = "deepseek",
+        .display_name = "DeepSeek V4 Pro",
+        .model = "deepseek-v4-pro",
+        .base_url = "https://api.deepseek.com",
+    });
+    registry.default_model = try allocator.dupe(u8, "gpt-4.1-mini");
+}
+
+const BuiltinEntry = struct {
+    id: []const u8,
+    provider_id: []const u8,
+    display_name: []const u8,
+    model: []const u8,
+    base_url: []const u8,
+};
+
+fn addBuiltinEntry(allocator: std.mem.Allocator, registry: *Registry, builtin: BuiltinEntry) !void {
     var source = try common.ResourceSourceInfo.clone(allocator, .builtin, "builtin", 0);
     errdefer source.deinit(allocator);
-    const id = try allocator.dupe(u8, "gpt-4.1-mini");
+    const id = try allocator.dupe(u8, builtin.id);
     errdefer allocator.free(id);
-    const provider_id = try allocator.dupe(u8, "openai_compatible");
+    const provider_id = try allocator.dupe(u8, builtin.provider_id);
     errdefer allocator.free(provider_id);
-    const display_name = try allocator.dupe(u8, "GPT-4.1 Mini");
+    const display_name = try allocator.dupe(u8, builtin.display_name);
     errdefer allocator.free(display_name);
-    const model = try allocator.dupe(u8, "gpt-4.1-mini");
+    const model = try allocator.dupe(u8, builtin.model);
     errdefer allocator.free(model);
-    const base_url = try allocator.dupe(u8, "https://api.openai.com/v1");
+    const base_url = try allocator.dupe(u8, builtin.base_url);
     errdefer allocator.free(base_url);
-    const default_model = try allocator.dupe(u8, "gpt-4.1-mini");
-    errdefer allocator.free(default_model);
     const entry = ModelEntry{
         .id = id,
         .provider_id = provider_id,
@@ -100,7 +138,6 @@ fn addBuiltin(allocator: std.mem.Allocator, registry: *Registry) !void {
         mutable.deinit(allocator);
     }
     try registry.entries.append(allocator, entry);
-    registry.default_model = default_model;
 }
 
 fn applyFile(allocator: std.mem.Allocator, io: std.Io, registry: *Registry, path: []const u8, source: common.ResourceSource, scope: ModelScope, priority: u8) !void {
@@ -179,6 +216,9 @@ pub const SelectOptions = struct {
 
 pub fn selectModel(allocator: std.mem.Allocator, registry: *const Registry, options: SelectOptions) !ModelEntry {
     if (options.provider_override) |provider_id| {
+        if (options.model_override == null) {
+            if (registry.findDefaultForProvider(provider_id)) |entry| return try ModelEntry.clone(allocator, entry.*);
+        }
         const model_name = options.model_override orelse options.settings_model;
         var source = try common.ResourceSourceInfo.clone(allocator, .project, "cli", 255);
         errdefer source.deinit(allocator);

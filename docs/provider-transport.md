@@ -36,7 +36,11 @@ M1 currently keeps live transport behind this harness so default development sta
 
 ## M1 Request Builder Limits
 
-The M1 OpenAI-compatible request builder serializes simple text message content only. It does not yet serialize tool definitions, tool result messages, images, thinking blocks, or multi-block content. M1 parsers can read recorded tool-call streams; full outgoing tool-use request support belongs with later agent/tool milestones.
+The M1 OpenAI-compatible request builder serializes simple text message content, assistant tool-call history, tool result messages, and assistant thinking blocks as provider reasoning content. It does not yet serialize tool definitions, images, or rich multi-block content. M1 parsers can read recorded tool-call streams; full outgoing tool-use request support belongs with later agent/tool milestones.
+
+DeepSeek is routed through this OpenAI-compatible request path with provider-specific auth and default base URL. For DeepSeek requests, Pig emits `thinking.type: "disabled"` when thinking is off, and emits `thinking.type: "enabled"` plus the selected `reasoning_effort` string when thinking is enabled. Pig does not remap thinking levels for DeepSeek; compatibility handling remains provider-side.
+
+OpenAI-compatible assistant tool-call history can replay `reasoning_content` from Pig thinking blocks. Final-answer reasoning is not replayed into later user turns.
 
 ## Live Transport Status
 

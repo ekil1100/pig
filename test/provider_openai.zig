@@ -34,6 +34,22 @@ test "openai compatible tool stream assembles tool call arguments" {
     try std.testing.expectEqualStrings("{\"path\":\"README.md\"}", collector.events.items[5].arguments_json.?);
 }
 
+test "openai compatible reasoning content maps to thinking deltas" {
+    var collector = provider.testing.EventCollector.init(std.testing.allocator);
+    defer collector.deinit();
+
+    const bytes =
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n" ++
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"plan\"}}]}\n\n" ++
+        "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n" ++
+        "data: [DONE]\n\n";
+    try provider.openai_compatible.parseBytes(std.testing.allocator, bytes, collector.sink());
+    try std.testing.expectEqual(provider.ProviderEventTag.thinking_delta, collector.events.items[1].tag);
+    try std.testing.expectEqualStrings("plan", collector.events.items[1].text.?);
+    try std.testing.expectEqual(provider.ProviderEventTag.text_delta, collector.events.items[2].tag);
+    try std.testing.expectEqualStrings("done", collector.events.items[2].text.?);
+}
+
 test "openai compatible usage and missing done behavior" {
     var usage_collector = provider.testing.EventCollector.init(std.testing.allocator);
     defer usage_collector.deinit();
@@ -48,6 +64,71 @@ test "openai compatible usage and missing done behavior" {
     try std.testing.expectError(error.StreamParseError, provider.openai_compatible.parseBytes(std.testing.allocator, bytes, missing_done.sink()));
     try std.testing.expectEqual(provider.ProviderEventTag.error_event, missing_done.events.items[missing_done.events.items.len - 1].tag);
     for (missing_done.events.items) |event| try std.testing.expect(event.tag != .done);
+}
+
+test "openai request builder serializes thinking controls and reasoning replay" {
+    const user_blocks = [_]provider.ContentBlockView{.{ .text = .{ .text = "hello" } }};
+    const assistant_blocks = [_]provider.ContentBlockView{
+        .{ .thinking = .{ .text = "plan" } },
+        .{ .tool_call = .{ .id = "call_1", .name = "read", .arguments_json = "{\"path\":\"README.md\"}" } },
+    };
+    const tool_blocks = [_]provider.ContentBlockView{.{ .tool_result = .{ .tool_call_id = "call_1", .content_json = "{\"ok\":true}" } }};
+    const messages = [_]provider.MessageView{
+        .{ .role = .user, .content = &user_blocks },
+        .{ .role = .assistant, .content = &assistant_blocks },
+        .{ .role = .tool, .content = &tool_blocks },
+    };
+    var req = try provider.openai_compatible.buildChatCompletionsRequest(std.testing.allocator, .{
+        .base_url = "https://api.deepseek.com",
+        .api_key = "test-deepseek-key",
+        .model = "deepseek-v4-flash",
+        .thinking = .{ .type = .enabled, .reasoning_effort = "high" },
+    }, &messages);
+    defer req.deinit(std.testing.allocator);
+
+    try std.testing.expect(std.mem.indexOf(u8, req.body, "\"thinking\":{\"type\":\"enabled\"}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, req.body, "\"reasoning_effort\":\"high\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, req.body, "\"reasoning_content\":\"plan\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, req.body, "\"tool_calls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, req.body, "\"tool_call_id\":\"call_1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, req.body, "test-deepseek-key") == null);
+}
+
+test "openai request builder omits final-answer reasoning replay" {
+    const user_blocks = [_]provider.ContentBlockView{.{ .text = .{ .text = "hello" } }};
+    const assistant_blocks = [_]provider.ContentBlockView{
+        .{ .thinking = .{ .text = "private prior reasoning" } },
+        .{ .text = .{ .text = "final answer" } },
+    };
+    const messages = [_]provider.MessageView{
+        .{ .role = .user, .content = &user_blocks },
+        .{ .role = .assistant, .content = &assistant_blocks },
+    };
+    var req = try provider.openai_compatible.buildChatCompletionsRequest(std.testing.allocator, .{
+        .base_url = "https://api.deepseek.com",
+        .api_key = "test-deepseek-key",
+        .model = "deepseek-v4-flash",
+        .thinking = .{ .type = .enabled, .reasoning_effort = "high" },
+    }, &messages);
+    defer req.deinit(std.testing.allocator);
+
+    try std.testing.expect(std.mem.indexOf(u8, req.body, "reasoning_content") == null);
+    try std.testing.expect(std.mem.indexOf(u8, req.body, "private prior reasoning") == null);
+    try std.testing.expect(std.mem.indexOf(u8, req.body, "final answer") != null);
+}
+
+test "openai request builder can explicitly disable provider thinking" {
+    const blocks = [_]provider.ContentBlockView{.{ .text = .{ .text = "hello" } }};
+    const messages = [_]provider.MessageView{.{ .role = .user, .content = &blocks }};
+    var req = try provider.openai_compatible.buildChatCompletionsRequest(std.testing.allocator, .{
+        .base_url = "https://api.deepseek.com",
+        .api_key = "test-deepseek-key",
+        .model = "deepseek-v4-flash",
+        .thinking = .{ .type = .disabled, .reasoning_effort = "high" },
+    }, &messages);
+    defer req.deinit(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, req.body, "\"thinking\":{\"type\":\"disabled\"}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, req.body, "reasoning_effort") == null);
 }
 
 test "openai request builder creates streaming chat completions request" {

@@ -53,6 +53,7 @@ OpenAI-compatible:
 
 - assistant role/content/tool delta starts the message if needed
 - `delta.content` -> `text_delta`
+- `delta.reasoning_content` -> `thinking_delta`
 - streamed `tool_calls[].function.arguments` -> tool-call delta/end assembly
 - `finish_reason` -> `message_delta` and `message_end`
 - `[DONE]` -> `done`

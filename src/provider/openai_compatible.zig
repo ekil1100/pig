@@ -120,6 +120,10 @@ const ParserState = struct {
             try self.ensureStart();
             try self.sink.emit(.{ .text_delta = .{ .text = content.string } });
         };
+        if (objectGet(delta, "reasoning_content")) |reasoning| if (reasoning == .string) {
+            try self.ensureStart();
+            try self.sink.emit(.{ .thinking_delta = .{ .text = reasoning.string } });
+        };
         if (objectGet(delta, "tool_calls")) |calls| {
             try self.ensureStart();
             if (calls == .array) for (calls.array.items) |call| try self.handleToolCall(call);
@@ -179,7 +183,7 @@ pub fn buildChatCompletionsRequest(allocator: std.mem.Allocator, config: OpenAiC
     errdefer allocator.free(method);
     const auth = try std.fmt.allocPrint(allocator, "Bearer {s}", .{config.api_key});
     errdefer allocator.free(auth);
-    const body = try buildBody(allocator, config.model, input_messages);
+    const body = try buildBody(allocator, config, input_messages);
     errdefer allocator.free(body);
 
     const headers = try allocator.alloc(transport.Header, 3);
@@ -204,22 +208,85 @@ pub fn buildChatCompletionsRequest(allocator: std.mem.Allocator, config: OpenAiC
     return .{ .method = method, .url = url, .headers = headers, .body = body };
 }
 
-fn buildBody(allocator: std.mem.Allocator, model: []const u8, input_messages: []const messages.MessageView) error{OutOfMemory}![]u8 {
+fn buildBody(allocator: std.mem.Allocator, config: OpenAiCompatibleConfig, input_messages: []const messages.MessageView) error{OutOfMemory}![]u8 {
     var w: std.Io.Writer.Allocating = .init(allocator);
     defer w.deinit();
     w.writer.writeAll("{\"model\":") catch return error.OutOfMemory;
-    try writeJsonString(&w.writer, model);
-    w.writer.writeAll(",\"stream\":true,\"messages\":[") catch return error.OutOfMemory;
+    try writeJsonString(&w.writer, config.model);
+    w.writer.writeAll(",\"stream\":true") catch return error.OutOfMemory;
+    try writeThinkingOptions(&w.writer, config.thinking);
+    w.writer.writeAll(",\"messages\":[") catch return error.OutOfMemory;
     for (input_messages, 0..) |message, i| {
         if (i > 0) w.writer.writeAll(",") catch return error.OutOfMemory;
-        w.writer.writeAll("{\"role\":") catch return error.OutOfMemory;
-        try writeJsonString(&w.writer, types.Role.toString(message.role));
-        w.writer.writeAll(",\"content\":") catch return error.OutOfMemory;
-        try writeJsonString(&w.writer, firstText(message));
-        w.writer.writeAll("}") catch return error.OutOfMemory;
+        try writeMessage(&w.writer, message);
     }
     w.writer.writeAll("]}") catch return error.OutOfMemory;
     return w.toOwnedSlice() catch return error.OutOfMemory;
+}
+
+fn writeThinkingOptions(writer: *std.Io.Writer, thinking: config_mod.ThinkingOptions) error{OutOfMemory}!void {
+    switch (thinking.type) {
+        .omitted => {},
+        .disabled, .enabled => {
+            writer.writeAll(",\"thinking\":{\"type\":") catch return error.OutOfMemory;
+            try writeJsonString(writer, switch (thinking.type) {
+                .disabled => "disabled",
+                .enabled => "enabled",
+                .omitted => unreachable,
+            });
+            writer.writeAll("}") catch return error.OutOfMemory;
+        },
+    }
+    if (thinking.type == .enabled) if (thinking.reasoning_effort) |effort| {
+        writer.writeAll(",\"reasoning_effort\":") catch return error.OutOfMemory;
+        try writeJsonString(writer, effort);
+    };
+}
+
+fn writeMessage(writer: *std.Io.Writer, message: messages.MessageView) error{OutOfMemory}!void {
+    writer.writeAll("{\"role\":") catch return error.OutOfMemory;
+    try writeJsonString(writer, types.Role.toString(message.role));
+    switch (message.role) {
+        .tool => {
+            const result = firstToolResult(message);
+            writer.writeAll(",\"tool_call_id\":") catch return error.OutOfMemory;
+            try writeJsonString(writer, if (result) |block| block.tool_call_id else "");
+            writer.writeAll(",\"content\":") catch return error.OutOfMemory;
+            try writeJsonString(writer, if (result) |block| block.content_json else "");
+        },
+        else => {
+            writer.writeAll(",\"content\":") catch return error.OutOfMemory;
+            try writeJsonString(writer, firstText(message));
+            if (message.role == .assistant) {
+                const replay_reasoning = hasToolCall(message);
+                if (replay_reasoning) if (firstThinkingText(message)) |thinking| {
+                    writer.writeAll(",\"reasoning_content\":") catch return error.OutOfMemory;
+                    try writeJsonString(writer, thinking);
+                };
+                var wrote_tools = false;
+                for (message.content) |block| switch (block) {
+                    .tool_call => |call| {
+                        if (!wrote_tools) {
+                            writer.writeAll(",\"tool_calls\":[") catch return error.OutOfMemory;
+                            wrote_tools = true;
+                        } else {
+                            writer.writeAll(",") catch return error.OutOfMemory;
+                        }
+                        writer.writeAll("{\"id\":") catch return error.OutOfMemory;
+                        try writeJsonString(writer, call.id);
+                        writer.writeAll(",\"type\":\"function\",\"function\":{\"name\":") catch return error.OutOfMemory;
+                        try writeJsonString(writer, call.name);
+                        writer.writeAll(",\"arguments\":") catch return error.OutOfMemory;
+                        try writeJsonString(writer, call.arguments_json);
+                        writer.writeAll("}}") catch return error.OutOfMemory;
+                    },
+                    else => {},
+                };
+                if (wrote_tools) writer.writeAll("]") catch return error.OutOfMemory;
+            }
+        },
+    }
+    writer.writeAll("}") catch return error.OutOfMemory;
 }
 
 fn writeJsonString(writer: *std.Io.Writer, value: []const u8) error{OutOfMemory}!void {
@@ -249,6 +316,32 @@ fn firstText(message: messages.MessageView) []const u8 {
         else => {},
     };
     return "";
+}
+
+fn firstThinkingText(message: messages.MessageView) ?[]const u8 {
+    for (message.content) |block| switch (block) {
+        .thinking => |thinking| return thinking.text,
+        else => {},
+    };
+    return null;
+}
+
+fn hasToolCall(message: messages.MessageView) bool {
+    for (message.content) |block| switch (block) {
+        .tool_call => return true,
+        else => {},
+    };
+    return false;
+}
+
+const ToolResultView = struct { tool_call_id: []const u8, content_json: []const u8 };
+
+fn firstToolResult(message: messages.MessageView) ?ToolResultView {
+    for (message.content) |block| switch (block) {
+        .tool_result => |result| return .{ .tool_call_id = result.tool_call_id, .content_json = result.content_json },
+        else => {},
+    };
+    return null;
 }
 
 fn objectGet(value: std.json.Value, key: []const u8) ?std.json.Value {

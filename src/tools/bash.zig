@@ -18,7 +18,7 @@ pub fn execute(ctx: *context_mod.ToolContext, args_json: []const u8) !context_mo
     const decision = ctx.approval.decide(.{ .kind = .run_bash, .tool_name = "bash", .summary = "run bash command", .preview_json = preview, .risk = .confirmation_required, .access = .execute_process }) catch return errorResult(ctx, "approval_failed", "approval backend failed");
     if (decision == .deny) return errorResult(ctx, "approval_denied", "approval denied");
 
-    const argv = [_][]const u8{ "bash", "-lc", command };
+    const argv = [_][]const u8{ "bash", "--noprofile", "--norc", "-c", command };
     const capture_limit = @max(ctx.limits.max_bash_capture_bytes, ctx.limits.max_bash_output_bytes);
     const run_result = std.process.run(ctx.allocator, ctx.io, .{
         .argv = &argv,

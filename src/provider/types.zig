@@ -8,6 +8,7 @@ pub const ProviderKind = enum {
     azure_openai,
     bedrock,
     openrouter,
+    deepseek,
     custom,
 
     pub fn toString(kind: ProviderKind) []const u8 {

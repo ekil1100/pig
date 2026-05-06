@@ -4,6 +4,7 @@ const provider = pig.provider;
 
 test "provider kinds roles usage and compatibility exports" {
     try std.testing.expectEqual(provider.ProviderKind.openai_compatible, try provider.ProviderKind.fromString("openai_compatible"));
+    try std.testing.expectEqual(provider.ProviderKind.deepseek, try provider.ProviderKind.fromString("deepseek"));
     try std.testing.expectEqualStrings("anthropic", provider.ProviderKind.toString(.anthropic));
     try std.testing.expectError(error.UnknownProviderKind, provider.ProviderKind.fromString("unknown"));
     try std.testing.expectEqual(provider.ProviderStatus.unconfigured, provider.ProviderStatus.unconfigured);

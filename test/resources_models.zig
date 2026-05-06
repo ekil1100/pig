@@ -29,3 +29,26 @@ test "model selection supports transient cli provider model" {
     try std.testing.expectEqualStrings("openai_compatible", entry.provider_id);
     try std.testing.expectEqualStrings("custom-model", entry.model);
 }
+
+test "model selection uses provider default when cli provider omits model" {
+    var registry = try pig.resources.models.loadRegistry(std.testing.allocator, std.testing.io, "missing-global-models.json", "missing-project-models.json");
+    defer registry.deinit(std.testing.allocator);
+    var entry = try pig.resources.models.selectModel(std.testing.allocator, &registry, .{ .provider_override = "deepseek", .model_override = null, .settings_model = "gpt-4.1-mini" });
+    defer entry.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("deepseek-v4-flash", entry.id);
+    try std.testing.expectEqualStrings("deepseek", entry.provider_id);
+    try std.testing.expectEqualStrings("deepseek-v4-flash", entry.model);
+    try std.testing.expectEqualStrings("https://api.deepseek.com", entry.base_url.?);
+}
+
+test "model registry includes builtin deepseek models" {
+    var registry = try pig.resources.models.loadRegistry(std.testing.allocator, std.testing.io, "missing-global-models.json", "missing-project-models.json");
+    defer registry.deinit(std.testing.allocator);
+    const flash = registry.find("deepseek-v4-flash").?;
+    try std.testing.expectEqualStrings("deepseek", flash.provider_id);
+    try std.testing.expectEqualStrings("deepseek-v4-flash", flash.model);
+    try std.testing.expectEqualStrings("https://api.deepseek.com", flash.base_url.?);
+    const pro = registry.find("deepseek-v4-pro").?;
+    try std.testing.expectEqualStrings("deepseek", pro.provider_id);
+    try std.testing.expectEqualStrings("gpt-4.1-mini", registry.default_model.?);
+}

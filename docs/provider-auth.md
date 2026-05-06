@@ -19,6 +19,7 @@ The default auth JSON path comes from `~/.pig/agent/auth.json`. Project settings
 ## Environment Variables
 
 - OpenAI-compatible: `PIG_OPENAI_COMPAT_API_KEY`
+- DeepSeek: `DEEPSEEK_API_KEY` or `PIG_DEEPSEEK_API_KEY`
 - Anthropic: `ANTHROPIC_API_KEY` or `PIG_ANTHROPIC_API_KEY`
 - Gemini: `GEMINI_API_KEY` or `PIG_GEMINI_API_KEY`
 
@@ -35,6 +36,7 @@ Live smoke also requires:
 {
   "providers": {
     "openai_compatible": { "api_key": "test-openai-key" },
+    "deepseek": { "api_key": "test-deepseek-key" },
     "anthropic": { "api_key": "test-anthropic-key" }
   }
 }

@@ -53,6 +53,7 @@ pub fn resolveApiKey(allocator: std.mem.Allocator, options: ResolveOptions) ![]u
 fn envNames(kind: types.ProviderKind) []const []const u8 {
     return switch (kind) {
         .openai_compatible, .openai_responses, .azure_openai, .openrouter, .custom => &.{"PIG_OPENAI_COMPAT_API_KEY"},
+        .deepseek => &.{ "DEEPSEEK_API_KEY", "PIG_DEEPSEEK_API_KEY" },
         .anthropic => &.{ "ANTHROPIC_API_KEY", "PIG_ANTHROPIC_API_KEY" },
         .gemini => &.{ "GEMINI_API_KEY", "PIG_GEMINI_API_KEY" },
         .bedrock => &.{"AWS_ACCESS_KEY_ID"},
@@ -68,6 +69,7 @@ fn providerJsonKey(kind: types.ProviderKind) []const u8 {
         .azure_openai => "azure_openai",
         .bedrock => "bedrock",
         .openrouter => "openrouter",
+        .deepseek => "deepseek",
         .custom => "custom",
     };
 }
@@ -93,6 +95,7 @@ fn readAuthJson(allocator: std.mem.Allocator, io: std.Io, path: []const u8, kind
 pub fn formatMissingKeyMessage(kind: types.ProviderKind) []const u8 {
     return switch (kind) {
         .openai_compatible => "missing OpenAI-compatible API key: set PIG_OPENAI_COMPAT_API_KEY",
+        .deepseek => "missing DeepSeek API key: set DEEPSEEK_API_KEY or PIG_DEEPSEEK_API_KEY",
         .anthropic => "missing Anthropic API key: set ANTHROPIC_API_KEY or PIG_ANTHROPIC_API_KEY",
         .gemini => "missing Gemini API key: set GEMINI_API_KEY or PIG_GEMINI_API_KEY",
         else => "missing provider API key",

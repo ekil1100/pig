@@ -50,6 +50,25 @@ test "missing auth key returns sanitized auth error" {
     try std.testing.expect(std.mem.indexOf(u8, msg, "ANTHROPIC") != null);
 }
 
+test "deepseek auth uses dedicated env and message" {
+    var env = provider.auth.TestEnv.init(&.{
+        .{ .key = "DEEPSEEK_API_KEY", .value = "deepseek-env-key" },
+    });
+
+    const env_key = try provider.auth.resolveApiKey(std.testing.allocator, .{
+        .kind = .deepseek,
+        .explicit_api_key = null,
+        .auth_json_path = null,
+        .env = env.reader(),
+    });
+    defer std.testing.allocator.free(env_key);
+    try std.testing.expectEqualStrings("deepseek-env-key", env_key);
+
+    const msg = provider.auth.formatMissingKeyMessage(.deepseek);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "DEEPSEEK_API_KEY") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "deepseek-env-key") == null);
+}
+
 test "invalid auth json shape is sanitized" {
     var env = provider.auth.TestEnv.init(&.{});
     const result = provider.auth.resolveApiKey(std.testing.allocator, .{

@@ -5,6 +5,9 @@
     },
     "anthropic": {
       "api_key": "test-anthropic-key"
+    },
+    "deepseek": {
+      "api_key": "test-deepseek-key"
     }
   }
 }

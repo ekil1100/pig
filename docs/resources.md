@@ -45,6 +45,8 @@ The model registry starts with built-ins, then applies global and project `model
 
 `settings.model` is a registry id. A model entry's `model` field is the provider-facing model name. `resources.models` keeps `provider_id` as a string; `app.model_factory` maps it to `provider.ProviderKind`.
 
+Built-in model entries include `gpt-4.1-mini`, `deepseek-v4-flash`, and `deepseek-v4-pro`. DeepSeek entries use `provider_id: "deepseek"` and the OpenAI-compatible base URL `https://api.deepseek.com`.
+
 ## Context Files
 
 Context discovery reads `AGENTS.md`, `CLAUDE.md`, `SYSTEM.md`, and `APPEND_SYSTEM.md` from the resolved workspace root down to the current working directory. Discovery must not read parent directories above the workspace root.

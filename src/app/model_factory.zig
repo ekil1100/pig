@@ -52,11 +52,12 @@ pub const OwnedModelClient = struct {
     fn streamTurn(ptr: *anyopaque, request: agent.model_client.ModelRequest, sink: provider.EventSink) agent.model_client.ModelClientError!void {
         const self: *OwnedModelClient = @ptrCast(@alignCast(ptr));
         switch (self.provider_kind) {
-            .openai_compatible, .openrouter, .custom => {
+            .openai_compatible, .openrouter, .deepseek, .custom => {
                 var provider_request = provider.openai_compatible.buildChatCompletionsRequest(self.allocator, .{
                     .base_url = self.base_url,
                     .api_key = self.api_key,
                     .model = self.model,
+                    .thinking = self.thinkingOptions(request.thinking_level),
                 }, request.messages) catch return error.OutOfMemory;
                 defer provider_request.deinit(self.allocator);
                 var transport = self.unsupported_transport.transport();
@@ -70,6 +71,12 @@ pub const OwnedModelClient = struct {
             },
             else => return error.ProviderFailed,
         }
+    }
+
+    fn thinkingOptions(self: *OwnedModelClient, level: agent.ThinkingLevel) provider.config.ThinkingOptions {
+        if (self.provider_kind != .deepseek) return .{};
+        if (level == .off) return .{ .type = .disabled };
+        return .{ .type = .enabled, .reasoning_effort = @tagName(level) };
     }
 };
 
@@ -91,6 +98,7 @@ pub fn create(options: CreateOptions) ModelFactoryError!OwnedModelClient {
     errdefer options.allocator.free(api_key);
     const base_url_default = switch (kind) {
         .openai_compatible, .openrouter, .custom => "https://api.openai.com/v1",
+        .deepseek => "https://api.deepseek.com",
         .anthropic => "https://api.anthropic.com/v1",
         else => "https://example.invalid",
     };
