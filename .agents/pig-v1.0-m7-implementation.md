@@ -92,7 +92,6 @@ test/resources_discovery.zig
 test/app_config_runtime.zig
 test/model_factory.zig
 test/interactive_reload.zig
-fixtures/resources/
 ```
 
 如果某些资源 DTO 在 M7 中很小，可以先合并到 `resources/discovery.zig`，但 public API 应从 `src/resources/mod.zig` 统一导出。
@@ -531,21 +530,11 @@ zig build smoke
 zig build fmt-check
 ```
 
-Fixtures：
+Resource fixtures：
 
-```text
-fixtures/resources/
-  global/settings.json
-  global/models.json
-  project/settings.json
-  project/models.json
-  project/AGENTS.md
-  project/SYSTEM.md
-  invalid/settings.json
-  collisions/
-```
+M7 resource tests use `std.testing.tmpDir()` to generate settings, models, context files, invalid files, and collision cases dynamically. The repository does not require a checked-in `fixtures/resources/` tree for M7.
 
-Fixtures 不能包含真实用户路径、API key 或真实 session 内容。
+动态生成的 fixtures 不能包含真实用户路径、API key 或真实 session 内容。
 
 ## Slice 计划
 
@@ -652,7 +641,7 @@ Fixtures 不能包含真实用户路径、API key 或真实 session 内容。
 - 更新 `docs/architecture.md` M7 描述。
 - 新增 `docs/resources.md`。
 - 更新 `docs/provider-auth.md`，说明 app-level auth/config assembly。
-- 增加 `fixtures/resources`。
+- resource/config tests 使用 `std.testing.tmpDir()` 动态生成 fixture，不新增静态 `fixtures/resources`。
 
 验收：
 

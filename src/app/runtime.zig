@@ -85,7 +85,7 @@ pub fn runPrint(config: args.RunConfig, context: RuntimeContext, stdout: *std.Io
 
 pub fn unsupportedMode(config: args.RunConfig, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !RunStatus {
     const message = switch (config.mode) {
-        .interactive => "interactive mode is not implemented in M7 yet",
+        .interactive => "interactive mode is handled by the CLI dispatcher",
         .rpc => "rpc mode is not implemented in M7 yet",
         .print => unreachable,
     };
