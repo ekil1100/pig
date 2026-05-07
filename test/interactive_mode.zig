@@ -82,6 +82,96 @@ test "interactive mode reports missing model without unsupported skeleton" {
     try std.testing.expect(std.mem.indexOf(u8, stderr.written(), "not implemented") == null);
 }
 
+test "interactive mode starts without a default model and prompts for setup" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(root);
+
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const code = try cli.runWithContext(&.{"--interactive"}, .{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .env_home = root,
+        .interactive_input = "/model\rquit\r",
+        .terminal_size = .{ .width = 96, .height = 20 },
+    }, &stdout.writer, &stderr.writer);
+
+    try std.testing.expectEqual(cli.ExitCode.ok, code);
+    try std.testing.expectEqualStrings("", stderr.written());
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "no model selected") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "current model:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "none") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "run /login or set a provider API key") != null);
+}
+
+test "interactive model selector only shows configured provider models" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(root);
+    var env = provider.auth.TestEnv.init(&.{.{ .key = "DEEPSEEK_API_KEY", .value = "test-key" }});
+
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const code = try cli.runWithContext(&.{"--interactive"}, .{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .env_home = root,
+        .env = env.reader(),
+        .interactive_input = "/model\rquit\r",
+        .terminal_size = .{ .width = 96, .height = 20 },
+    }, &stdout.writer, &stderr.writer);
+
+    try std.testing.expectEqual(cli.ExitCode.ok, code);
+    try std.testing.expectEqualStrings("", stderr.written());
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "deepseek-v4-flash") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "deepseek-v4-pro") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "gpt-4.1-mini") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "run /login") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "use /model <model-id>") != null);
+}
+
+test "interactive model selection persists to global settings" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(root);
+    var env = provider.auth.TestEnv.init(&.{.{ .key = "DEEPSEEK_API_KEY", .value = "test-key" }});
+
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const code = try cli.runWithContext(&.{ "--interactive", "--cwd", root }, .{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .env_home = root,
+        .env = env.reader(),
+        .interactive_input = "/model deepseek-v4-flash\rquit\r",
+        .terminal_size = .{ .width = 96, .height = 20 },
+    }, &stdout.writer, &stderr.writer);
+
+    try std.testing.expectEqual(cli.ExitCode.ok, code);
+    try std.testing.expectEqualStrings("", stderr.written());
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "model selected: deepseek-v4-flash (saved)") != null);
+
+    const settings_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/.pig/agent/settings.json", .{root});
+    defer std.testing.allocator.free(settings_path);
+    const saved = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, settings_path, std.testing.allocator, .limited(1024 * 1024));
+    defer std.testing.allocator.free(saved);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"provider\": \"deepseek\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"model\": \"deepseek-v4-flash\"") != null);
+}
+
 test "no arguments start interactive mode" {
     const turn = [_]provider.ProviderEvent{
         .{ .message_start = .{ .role = .assistant } },

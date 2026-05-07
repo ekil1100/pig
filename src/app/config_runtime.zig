@@ -24,14 +24,14 @@ pub const ResolveOptions = struct {
 pub const ResolvedRuntimeConfig = struct {
     paths: paths.PathSet,
     snapshot: resources.discovery.ResourceSnapshot,
-    model: resources.models.ModelEntry,
+    model: ?resources.models.ModelEntry,
     thinking_level: agent.ThinkingLevel,
     effective_run_config: args.RunConfig,
 
     pub fn deinit(self: *ResolvedRuntimeConfig, allocator: std.mem.Allocator) void {
         self.paths.deinit(allocator);
         self.snapshot.deinit(allocator);
-        self.model.deinit(allocator);
+        if (self.model) |*model| model.deinit(allocator);
         self.* = undefined;
     }
 
@@ -80,7 +80,7 @@ pub fn resolve(options: ResolveOptions) ConfigRuntimeError!ResolvedRuntimeConfig
         .settings_provider = snapshot.settings.provider,
         .settings_model = snapshot.settings.model,
     }) catch |err| return mapModelError(err);
-    errdefer model.deinit(allocator);
+    errdefer if (model) |*selected| selected.deinit(allocator);
 
     const thinking_level = parseThinking(snapshot.settings.thinking) orelse return error.InvalidThinkingLevel;
     var effective = options.config;

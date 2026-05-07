@@ -333,8 +333,18 @@ pub fn runLive(config: args.RunConfig, context: Context, io: std.Io, output: *st
 
     var input_buffer: [128]u8 = undefined;
     while (true) {
+        if (interactive_tty) {
+            if (tui.terminal.detectSizeForFd(std.posix.STDOUT_FILENO) orelse tui.terminal.detectSizeForFd(std.posix.STDIN_FILENO)) |size| {
+                if (size.width != app.size.width or size.height != app.size.height) {
+                    app.size = size;
+                    session.size = size;
+                    try renderApp(&app, output);
+                    try output.flush();
+                }
+            }
+        }
         try pumpActiveTurn(&active_turn, &app, output);
-        const poll_timeout: i32 = if (active_turn == null) -1 else 25;
+        const poll_timeout: i32 = if (active_turn == null) if (interactive_tty) 250 else -1 else 25;
         var poll_fds = [_]std.posix.pollfd{.{
             .fd = std.posix.STDIN_FILENO,
             .events = std.posix.POLL.IN,
@@ -559,7 +569,10 @@ fn pumpActiveTurn(active_turn: *?*ActiveTurn, app: *InteractiveApp, output: *std
         turn.finish(app);
         changed = true;
     }
-    if (changed) try renderApp(app, output);
+    if (changed) {
+        try renderApp(app, output);
+        try output.flush();
+    }
 }
 
 fn drainQueuedEvents(turn: *ActiveTurn, app: *InteractiveApp) !bool {
@@ -662,10 +675,15 @@ fn handleCommand(context: Context, app: *InteractiveApp, prompt: []const u8, act
         .model => {
             if (parsed.argv.len > 0) {
                 try handleModelSwitch(context, app, parsed.argv[0]);
-            } else if (app.model_status.items.len > 0) {
-                try app.appendItem(.status, app.model_status.items, false);
             } else {
-                try app.appendItem(.status, "model info unavailable", false);
+                if (app.model_status.items.len > 0) {
+                    try app.appendItem(.status, app.model_status.items, false);
+                } else {
+                    try app.appendItem(.status, "model info unavailable", false);
+                }
+                if (app.scoped_models_status.items.len > 0) {
+                    try app.appendItem(.status, app.scoped_models_status.items, false);
+                }
             }
         },
         .scoped_models => {
@@ -691,6 +709,7 @@ fn handleCommand(context: Context, app: *InteractiveApp, prompt: []const u8, act
             return .exit_ok;
         },
         .changelog => try app.appendItem(.status, "Pig v1.0 M8: slash commands, workflow features, session tree navigation, and compaction foundation", false),
+        .login => try app.appendItem(.status, "login setup: set a provider API key environment variable, then restart Pig and use /model. DeepSeek: DEEPSEEK_API_KEY or PIG_DEEPSEEK_API_KEY. OpenAI-compatible: PIG_OPENAI_COMPAT_API_KEY.", false),
         else => {
             const message = try std.fmt.allocPrint(context.allocator, "command not implemented yet: /{s}", .{spec.name});
             defer context.allocator.free(message);

@@ -52,15 +52,19 @@ pub fn runPrint(config: args.RunConfig, context: RuntimeContext, stdout: *std.Io
     const model = if (context.model_client) |injected|
         injected
     else if (resolved) |runtime_config| blk: {
+        const selected_model = runtime_config.model orelse {
+            try writeNoModelSelected(config.output, stdout, stderr);
+            return .failure;
+        };
         const io = context.io orelse return .internal;
         owned_model = model_factory.create(.{
             .allocator = context.allocator,
             .io = io,
             .auth_json_path = runtime_config.paths.global_auth,
             .env = context.env,
-            .model = runtime_config.model,
+            .model = selected_model,
         }) catch |err| {
-            try writeModelFactoryError(config.output, stdout, stderr, err, runtime_config.model.provider_id);
+            try writeModelFactoryError(config.output, stdout, stderr, err, selected_model.provider_id);
             return .failure;
         };
         break :blk owned_model.?.client();
@@ -185,6 +189,16 @@ fn writeModelUnavailable(output: args.OutputMode, stdout: *std.Io.Writer, stderr
         app_json.writeModelUnavailable(stdout) catch return error.WriteFailed;
     } else {
         try stderr.writeAll("model client unavailable\n");
+    }
+}
+
+fn writeNoModelSelected(output: args.OutputMode, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
+    const message = "no model selected: run /login or set a provider API key environment variable, then use /model";
+    if (output == .json) {
+        app_json.writeError(stdout, "provider", message) catch return error.WriteFailed;
+    } else {
+        try stderr.writeAll(message);
+        try stderr.writeAll("\n");
     }
 }
 

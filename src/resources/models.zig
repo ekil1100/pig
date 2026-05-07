@@ -215,13 +215,10 @@ pub const SelectOptions = struct {
     settings_model: ?[]const u8 = null,
 };
 
-pub fn selectModel(allocator: std.mem.Allocator, registry: *const Registry, options: SelectOptions) !ModelEntry {
+pub fn selectModel(allocator: std.mem.Allocator, registry: *const Registry, options: SelectOptions) !?ModelEntry {
     if (options.provider_override orelse options.settings_provider) |provider_id| {
         const model_override = options.model_override orelse if (options.provider_override == null) options.settings_model else null;
-        if (model_override == null) {
-            if (registry.findDefaultForProvider(provider_id)) |entry| return try ModelEntry.clone(allocator, entry.*);
-        }
-        const model_name = model_override orelse return error.UnknownModel;
+        const model_name = model_override orelse return null;
         if (registry.find(model_name)) |entry| {
             if (std.mem.eql(u8, entry.provider_id, provider_id)) {
                 if (!entry.enabled) return error.DisabledModel;
@@ -230,7 +227,7 @@ pub fn selectModel(allocator: std.mem.Allocator, registry: *const Registry, opti
         }
         return try transientModel(allocator, provider_id, model_name);
     }
-    const wanted = options.model_override orelse options.settings_model orelse registry.default_model orelse return error.UnknownModel;
+    const wanted = options.model_override orelse options.settings_model orelse return null;
     const entry = registry.find(wanted) orelse return error.UnknownModel;
     if (!entry.enabled) return error.DisabledModel;
     return try ModelEntry.clone(allocator, entry.*);

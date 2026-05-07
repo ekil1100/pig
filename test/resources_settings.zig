@@ -33,3 +33,23 @@ test "settings missing files are warnings and model/provider stay unset" {
     try std.testing.expectEqual(@as(?[]const u8, null), loaded.settings.provider);
     try std.testing.expectEqual(@as(?[]const u8, null), loaded.settings.model);
 }
+
+test "saving model selection preserves existing settings fields" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(root);
+    const project = try std.fs.path.join(std.testing.allocator, &.{ root, ".pig", "settings.json" });
+    defer std.testing.allocator.free(project);
+
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, std.fs.path.dirname(project).?);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = project, .data = "{\"model\":\"old\",\"tools\":{\"enabled\":false}}" });
+
+    try pig.resources.settings.saveModelSelection(std.testing.allocator, std.testing.io, project, "deepseek", "deepseek-v4-flash");
+
+    var loaded = try pig.resources.settings.load(std.testing.allocator, std.testing.io, "missing-global.json", project, .{});
+    defer loaded.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("deepseek", loaded.settings.provider.?);
+    try std.testing.expectEqualStrings("deepseek-v4-flash", loaded.settings.model.?);
+    try std.testing.expect(!loaded.settings.tools_enabled);
+}

@@ -39,7 +39,7 @@ defaults -> global settings.json -> project settings.json -> CLI flags
 
 Objects merge by field. Arrays replace the previous value. Missing files produce warnings, not failures. Invalid selected values, invalid settings JSON, and invalid models JSON are failures.
 
-Provider and model are unset by default in settings. Runtime model selection may still fall back to the registry default so the app can start, but that fallback is not written back into the effective run config as an explicit user setting.
+Provider and model are unset by default in settings. Runtime does not select a model until settings or CLI input names one. Interactive mode can still start without a model and asks the user to run `/login` or provide a provider API key environment variable before choosing from `/model`.
 
 ## Models
 

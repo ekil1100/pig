@@ -130,6 +130,12 @@ fn runInteractive(config: parsed_args.RunConfig, context: Context, stdout: *std.
         try stderr.writeAll("model client unavailable\n");
         return .failure;
     }
+    var live_size = context.terminal_size;
+    if (context.interactive_input == null and context.io != null) {
+        live_size = tui.terminal.detectSizeForFd(std.posix.STDOUT_FILENO) orelse
+            tui.terminal.detectSizeForFd(std.posix.STDIN_FILENO) orelse
+            live_size;
+    }
     var resolved: ?config_runtime.ResolvedRuntimeConfig = null;
     defer if (resolved) |*runtime_config| runtime_config.deinit(context.allocator);
     if (context.io) |io| {
@@ -154,19 +160,25 @@ fn runInteractive(config: parsed_args.RunConfig, context: Context, stdout: *std.
     var scoped_models_status: ?[]u8 = null;
     defer if (scoped_models_status) |status| context.allocator.free(status);
     if (resolved) |runtime_config| {
-        model_status = try formatCurrentModel(context.allocator, runtime_config);
-        scoped_models_status = try formatScopedModels(context.allocator, runtime_config);
+        const selectable_count = countSelectableModels(context.allocator, runtime_config, context);
+        model_status = try formatCurrentModel(context.allocator, runtime_config, selectable_count);
+        scoped_models_status = try formatSelectableModels(context.allocator, runtime_config, context);
     }
     const model: ?agent.ModelClient = if (context.model_client) |injected|
         injected
     else if (resolved) |runtime_config| blk: {
+        const selected_model = runtime_config.model orelse {
+            const selectable_count = countSelectableModels(context.allocator, runtime_config, context);
+            initial_status = try formatNoModelSelectedStatus(context.allocator, selectable_count);
+            break :blk null;
+        };
         const io = context.io orelse return .internal;
         owned_model = model_factory.create(.{
             .allocator = context.allocator,
             .io = io,
             .auth_json_path = runtime_config.paths.global_auth,
             .env = context.env,
-            .model = runtime_config.model,
+            .model = selected_model,
         }) catch |err| {
             if (scripted) {
                 try stderr.print("{s}\n", .{@errorName(err)});
@@ -197,7 +209,7 @@ fn runInteractive(config: parsed_args.RunConfig, context: Context, stdout: *std.
         .system_prompt = if (resolved) |runtime_config| runtime_config.systemPrompt() else null,
         .reload_hook = if (context.io != null) reload_hook else null,
         .model_switch_hook = if (context.io != null) model_switch_hook else null,
-        .size = context.terminal_size,
+        .size = live_size,
         .initial_status = initial_status,
         .model_status = model_status,
         .scoped_models_status = scoped_models_status,
@@ -266,19 +278,21 @@ const ModelSwitchContext = struct {
         });
         defer resolved.deinit(allocator);
 
-        const model_status = try formatCurrentModel(allocator, resolved);
+        const selectable_count = countSelectableModels(allocator, resolved, self.cli_context);
+        const model_status = try formatCurrentModel(allocator, resolved, selectable_count);
         errdefer allocator.free(model_status);
-        const scoped_models_status = try formatScopedModels(allocator, resolved);
+        const scoped_models_status = try formatSelectableModels(allocator, resolved, self.cli_context);
         errdefer allocator.free(scoped_models_status);
 
+        const selected_model = resolved.model orelse return error.UnknownModel;
         var created = model_factory.create(.{
             .allocator = allocator,
             .io = io,
             .auth_json_path = resolved.paths.global_auth,
             .env = self.cli_context.env,
-            .model = resolved.model,
+            .model = selected_model,
         }) catch |err| {
-            const status = try std.fmt.allocPrint(allocator, "model selected: {s} (model unavailable: {s})", .{ resolved.model.id, @errorName(err) });
+            const status = try std.fmt.allocPrint(allocator, "model selected: {s} (model unavailable: {s})", .{ selected_model.id, @errorName(err) });
             errdefer allocator.free(status);
             return .{
                 .status = status,
@@ -289,7 +303,8 @@ const ModelSwitchContext = struct {
         };
         errdefer created.deinit();
 
-        const status = try std.fmt.allocPrint(allocator, "model selected: {s}", .{resolved.model.id});
+        try resources.settings.saveModelSelection(allocator, io, resolved.paths.global_config, selected_model.provider_id, selected_model.id);
+        const status = try std.fmt.allocPrint(allocator, "model selected: {s} (saved)", .{selected_model.id});
         errdefer allocator.free(status);
         if (self.owned_model) |*old| old.deinit();
         self.owned_model = created;
@@ -303,7 +318,18 @@ const ModelSwitchContext = struct {
     }
 };
 
-fn formatCurrentModel(allocator: std.mem.Allocator, runtime_config: config_runtime.ResolvedRuntimeConfig) ![]u8 {
+fn formatCurrentModel(allocator: std.mem.Allocator, runtime_config: config_runtime.ResolvedRuntimeConfig, selectable_count: usize) ![]u8 {
+    const selected_model = runtime_config.model orelse {
+        const next = if (selectable_count > 0)
+            "next: use /model <model-id> to select a model"
+        else
+            "next: run /login or set a provider API key environment variable, then use /model";
+        return try std.fmt.allocPrint(allocator,
+            \\current model:
+            \\  none
+            \\  {s}
+        , .{next});
+    };
     return try std.fmt.allocPrint(allocator,
         \\current model:
         \\  id: {s}
@@ -312,20 +338,31 @@ fn formatCurrentModel(allocator: std.mem.Allocator, runtime_config: config_runti
         \\  provider model: {s}
         \\  scope: {s}
     , .{
-        runtime_config.model.id,
-        runtime_config.model.display_name,
-        runtime_config.model.provider_id,
-        runtime_config.model.model,
-        modelScopeName(runtime_config.model.scope),
+        selected_model.id,
+        selected_model.display_name,
+        selected_model.provider_id,
+        selected_model.model,
+        modelScopeName(selected_model.scope),
     });
 }
 
-fn formatScopedModels(allocator: std.mem.Allocator, runtime_config: config_runtime.ResolvedRuntimeConfig) ![]u8 {
+fn formatNoModelSelectedStatus(allocator: std.mem.Allocator, selectable_count: usize) ![]u8 {
+    if (selectable_count > 0) {
+        return try allocator.dupe(u8, "no model selected: use /model <model-id> to select a model");
+    }
+    return try allocator.dupe(u8, "no model selected: run /login or set a provider API key environment variable, then use /model");
+}
+
+fn formatSelectableModels(allocator: std.mem.Allocator, runtime_config: config_runtime.ResolvedRuntimeConfig, context: Context) ![]u8 {
     var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();
     try out.writer.writeAll("available models:\n");
+    var count: usize = 0;
     for (runtime_config.snapshot.models.entries.items) |entry| {
-        const marker = if (std.mem.eql(u8, entry.id, runtime_config.model.id)) "*" else " ";
+        if (!entry.enabled) continue;
+        if (!isSelectableProvider(entry.provider_id)) continue;
+        if (!providerConfigured(allocator, runtime_config, context, entry.provider_id)) continue;
+        const marker = if (runtime_config.model) |selected_model| if (std.mem.eql(u8, entry.id, selected_model.id)) "*" else " " else " ";
         const enabled = if (entry.enabled) "enabled" else "disabled";
         try out.writer.print("{s} {s} ({s}, {s}, {s})\n", .{
             marker,
@@ -334,11 +371,61 @@ fn formatScopedModels(allocator: std.mem.Allocator, runtime_config: config_runti
             modelScopeName(entry.scope),
             enabled,
         });
+        count += 1;
+    }
+    if (count == 0) {
+        try out.writer.writeAll("  none\n");
+        try out.writer.writeAll("  run /login or set a provider API key environment variable, then use /model\n");
     }
     if (runtime_config.snapshot.models.warnings.items.len > 0) {
         try out.writer.print("warnings: {d}\n", .{runtime_config.snapshot.models.warnings.items.len});
     }
     return try out.toOwnedSlice();
+}
+
+fn countSelectableModels(allocator: std.mem.Allocator, runtime_config: config_runtime.ResolvedRuntimeConfig, context: Context) usize {
+    var count: usize = 0;
+    for (runtime_config.snapshot.models.entries.items) |entry| {
+        if (!entry.enabled) continue;
+        if (!isSelectableProvider(entry.provider_id)) continue;
+        if (!providerConfigured(allocator, runtime_config, context, entry.provider_id)) continue;
+        count += 1;
+    }
+    return count;
+}
+
+fn isSelectableProvider(provider_id: []const u8) bool {
+    const kind = provider.ProviderKind.fromString(provider_id) catch return false;
+    return switch (kind) {
+        .openai_compatible, .openrouter, .deepseek, .custom => true,
+        else => false,
+    };
+}
+
+const EmptyEnv = struct {
+    fn reader(self: *EmptyEnv) provider.auth.EnvReader {
+        return .{ .ptr = self, .get_fn = get };
+    }
+
+    fn get(ptr: *anyopaque, key: []const u8) ?[]const u8 {
+        _ = ptr;
+        _ = key;
+        return null;
+    }
+};
+
+fn providerConfigured(allocator: std.mem.Allocator, runtime_config: config_runtime.ResolvedRuntimeConfig, context: Context, provider_id: []const u8) bool {
+    const kind = provider.ProviderKind.fromString(provider_id) catch return false;
+    var empty = EmptyEnv{};
+    const env = context.env orelse empty.reader();
+    const key = provider.auth.resolveApiKey(allocator, .{
+        .kind = kind,
+        .auth_json_path = runtime_config.paths.global_auth,
+        .io = context.io,
+        .env = env,
+    }) catch return false;
+    allocator.free(key);
+    return true;
 }
 
 fn modelScopeName(scope: resources.models.ModelScope) []const u8 {

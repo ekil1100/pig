@@ -181,3 +181,44 @@ pub fn applyOverrides(allocator: std.mem.Allocator, settings: *ResolvedSettings,
     if (overrides.tools_enabled) |enabled| settings.tools_enabled = enabled;
     if (overrides.include_p1_tools) |include| settings.include_p1_tools = include;
 }
+
+pub fn saveModelSelection(allocator: std.mem.Allocator, io: std.Io, settings_path: []const u8, provider_id: []const u8, model_id: []const u8) !void {
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, settings_path, allocator, .limited(1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => return try writeNewModelSelection(io, settings_path, provider_id, model_id),
+        else => return err,
+    };
+    defer allocator.free(bytes);
+
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, bytes, .{}) catch return error.InvalidSettingsJson;
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidSettingsJson;
+
+    const json_allocator = parsed.arena.allocator();
+    try parsed.value.object.put(json_allocator, "provider", .{ .string = provider_id });
+    try parsed.value.object.put(json_allocator, "model", .{ .string = model_id });
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    defer out.deinit();
+    var stringify: std.json.Stringify = .{
+        .writer = &out.writer,
+        .options = .{ .whitespace = .indent_2 },
+    };
+    try stringify.write(parsed.value);
+    try out.writer.writeByte('\n');
+    try writeSettings(io, settings_path, out.written());
+}
+
+fn writeNewModelSelection(io: std.Io, settings_path: []const u8, provider_id: []const u8, model_id: []const u8) !void {
+    var buffer: [4096]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    try writer.writeAll("{\n  \"provider\": ");
+    try std.json.Stringify.value(provider_id, .{}, &writer);
+    try writer.writeAll(",\n  \"model\": ");
+    try std.json.Stringify.value(model_id, .{}, &writer);
+    try writer.writeAll("\n}\n");
+    try writeSettings(io, settings_path, writer.buffered());
+}
+
+fn writeSettings(io: std.Io, settings_path: []const u8, data: []const u8) !void {
+    if (std.fs.path.dirname(settings_path)) |parent| try std.Io.Dir.cwd().createDirPath(io, parent);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = settings_path, .data = data });
+}

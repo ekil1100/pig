@@ -24,21 +24,17 @@ test "model registry merges and project overrides global" {
 test "model selection supports transient cli provider model" {
     var registry = try pig.resources.models.loadRegistry(std.testing.allocator, std.testing.io, "missing-global-models.json", "missing-project-models.json");
     defer registry.deinit(std.testing.allocator);
-    var entry = try pig.resources.models.selectModel(std.testing.allocator, &registry, .{ .provider_override = "openai_compatible", .model_override = "custom-model" });
+    var entry = (try pig.resources.models.selectModel(std.testing.allocator, &registry, .{ .provider_override = "openai_compatible", .model_override = "custom-model" })).?;
     defer entry.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings("openai_compatible", entry.provider_id);
     try std.testing.expectEqualStrings("custom-model", entry.model);
 }
 
-test "model selection uses provider default when cli provider omits model" {
+test "model selection stays empty when provider omits model" {
     var registry = try pig.resources.models.loadRegistry(std.testing.allocator, std.testing.io, "missing-global-models.json", "missing-project-models.json");
     defer registry.deinit(std.testing.allocator);
-    var entry = try pig.resources.models.selectModel(std.testing.allocator, &registry, .{ .provider_override = "deepseek", .model_override = null });
-    defer entry.deinit(std.testing.allocator);
-    try std.testing.expectEqualStrings("deepseek-v4-flash", entry.id);
-    try std.testing.expectEqualStrings("deepseek", entry.provider_id);
-    try std.testing.expectEqualStrings("deepseek-v4-flash", entry.model);
-    try std.testing.expectEqualStrings("https://api.deepseek.com", entry.base_url.?);
+    const entry = try pig.resources.models.selectModel(std.testing.allocator, &registry, .{ .provider_override = "deepseek", .model_override = null });
+    try std.testing.expect(entry == null);
 }
 
 test "model registry includes builtin deepseek models" {
@@ -65,19 +61,17 @@ test "model selection prefers settings model before registry default" {
 
     var registry = try pig.resources.models.loadRegistry(std.testing.allocator, std.testing.io, global, "missing-project-models.json");
     defer registry.deinit(std.testing.allocator);
-    var entry = try pig.resources.models.selectModel(std.testing.allocator, &registry, .{ .settings_model = "local" });
+    var entry = (try pig.resources.models.selectModel(std.testing.allocator, &registry, .{ .settings_model = "local" })).?;
     defer entry.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings("local", entry.id);
     try std.testing.expectEqualStrings("local-model", entry.model);
 }
 
-test "model selection supports settings provider without pinning a model" {
+test "model selection stays empty with settings provider without pinning a model" {
     var registry = try pig.resources.models.loadRegistry(std.testing.allocator, std.testing.io, "missing-global-models.json", "missing-project-models.json");
     defer registry.deinit(std.testing.allocator);
-    var entry = try pig.resources.models.selectModel(std.testing.allocator, &registry, .{ .settings_provider = "deepseek" });
-    defer entry.deinit(std.testing.allocator);
-    try std.testing.expectEqualStrings("deepseek-v4-flash", entry.id);
-    try std.testing.expectEqualStrings("deepseek", entry.provider_id);
+    const entry = try pig.resources.models.selectModel(std.testing.allocator, &registry, .{ .settings_provider = "deepseek" });
+    try std.testing.expect(entry == null);
 }
 
 test "model selection keeps registry entry when provider and model id both match" {
@@ -92,7 +86,7 @@ test "model selection keeps registry entry when provider and model id both match
 
     var registry = try pig.resources.models.loadRegistry(std.testing.allocator, std.testing.io, global, "missing-project-models.json");
     defer registry.deinit(std.testing.allocator);
-    var entry = try pig.resources.models.selectModel(std.testing.allocator, &registry, .{ .settings_provider = "custom", .settings_model = "custom-local" });
+    var entry = (try pig.resources.models.selectModel(std.testing.allocator, &registry, .{ .settings_provider = "custom", .settings_model = "custom-local" })).?;
     defer entry.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings("custom-local", entry.id);
     try std.testing.expectEqualStrings("provider-local", entry.model);
