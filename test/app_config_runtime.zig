@@ -20,7 +20,31 @@ test "config runtime resolves context prompt for injected model path" {
         .config = .{ .mode = .print, .prompt = "hi", .cwd = root },
     });
     defer resolved.deinit(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, resolved.systemPrompt().?, "You are Pig") != null);
     try std.testing.expect(std.mem.indexOf(u8, resolved.systemPrompt().?, "project instructions") != null);
+}
+
+test "config runtime builds default system prompt and tool list without context files" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(root);
+    const pig_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".pig" });
+    defer std.testing.allocator.free(pig_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, pig_dir);
+
+    var resolved = try pig.app.config_runtime.resolve(.{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .env_home = root,
+        .config = .{ .mode = .print, .prompt = "hi", .cwd = root },
+    });
+    defer resolved.deinit(std.testing.allocator);
+    const prompt = resolved.systemPrompt().?;
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "You are Pig") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Current working directory:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "- read:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "- grep:") == null);
 }
 
 test "config runtime provider override without model stays unselected" {

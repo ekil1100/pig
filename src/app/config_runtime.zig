@@ -2,6 +2,7 @@ const std = @import("std");
 const args = @import("args.zig");
 const agent = @import("../core/agent/mod.zig");
 const resources = @import("../resources/mod.zig");
+const tools_metadata = @import("../tools/metadata.zig");
 const paths = @import("../util/paths.zig");
 
 pub const ConfigRuntimeError = error{
@@ -26,17 +27,19 @@ pub const ResolvedRuntimeConfig = struct {
     snapshot: resources.discovery.ResourceSnapshot,
     model: ?resources.models.ModelEntry,
     thinking_level: agent.ThinkingLevel,
+    system_prompt: []const u8,
     effective_run_config: args.RunConfig,
 
     pub fn deinit(self: *ResolvedRuntimeConfig, allocator: std.mem.Allocator) void {
         self.paths.deinit(allocator);
         self.snapshot.deinit(allocator);
         if (self.model) |*model| model.deinit(allocator);
+        allocator.free(self.system_prompt);
         self.* = undefined;
     }
 
     pub fn systemPrompt(self: *const ResolvedRuntimeConfig) ?[]const u8 {
-        return self.snapshot.context.system_prompt;
+        return self.system_prompt;
     }
 };
 
@@ -90,7 +93,52 @@ pub fn resolve(options: ResolveOptions) ConfigRuntimeError!ResolvedRuntimeConfig
     effective.tools_enabled = snapshot.settings.tools_enabled;
     effective.include_p1_tools = snapshot.settings.include_p1_tools;
 
-    return .{ .paths = path_set, .snapshot = snapshot, .model = model, .thinking_level = thinking_level, .effective_run_config = effective };
+    const system_prompt = buildSystemPrompt(allocator, path_set.cwd, .{
+        .tools_enabled = effective.tools_enabled,
+        .include_p1_tools = effective.include_p1_tools,
+        .context_prompt = snapshot.context.system_prompt,
+    }) catch return error.OutOfMemory;
+    errdefer allocator.free(system_prompt);
+
+    return .{ .paths = path_set, .snapshot = snapshot, .model = model, .thinking_level = thinking_level, .system_prompt = system_prompt, .effective_run_config = effective };
+}
+
+const SystemPromptOptions = struct {
+    tools_enabled: bool,
+    include_p1_tools: bool,
+    context_prompt: ?[]const u8,
+};
+
+fn buildSystemPrompt(allocator: std.mem.Allocator, cwd: []const u8, options: SystemPromptOptions) ![]const u8 {
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    try out.writer.writeAll(
+        \\You are Pig, a local-first coding agent running inside a terminal coding harness.
+        \\
+        \\You help users by reading files, running commands, editing code, and writing new files through the tools provided by the harness.
+        \\
+        \\Guidelines:
+        \\- Use available tools for workspace, file, and command tasks. Do not claim you cannot access the local filesystem when relevant tools are available.
+        \\- Keep responses concise and direct.
+        \\- Show file paths clearly when working with files.
+        \\
+        \\Available tools:
+        \\
+    );
+    if (options.tools_enabled) {
+        const count: usize = if (options.include_p1_tools) tools_metadata.builtin_specs.len else 4;
+        for (tools_metadata.builtin_specs[0..count]) |spec| {
+            try out.writer.print("- {s}: {s}\n", .{ spec.name, spec.description });
+        }
+    } else {
+        try out.writer.writeAll("(none)\n");
+    }
+    try out.writer.print("\nCurrent working directory: {s}", .{cwd});
+    if (options.context_prompt) |context_prompt| if (context_prompt.len > 0) {
+        try out.writer.writeAll("\n\n# Project Context\n\nProject-specific instructions and guidelines:\n");
+        try out.writer.writeAll(context_prompt);
+    };
+    return out.toOwnedSlice();
 }
 
 fn resolveCwd(allocator: std.mem.Allocator, io: std.Io, cwd_arg: ?[]const u8) ![]u8 {

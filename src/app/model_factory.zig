@@ -54,12 +54,18 @@ pub const OwnedModelClient = struct {
         const self: *OwnedModelClient = @ptrCast(@alignCast(ptr));
         switch (self.provider_kind) {
             .openai_compatible, .openrouter, .deepseek, .custom => {
+                const tool_views = self.toolViews(request.tools) catch return error.OutOfMemory;
+                defer self.allocator.free(tool_views);
                 var provider_request = provider.openai_compatible.buildChatCompletionsRequest(self.allocator, .{
                     .base_url = self.base_url,
                     .api_key = self.api_key,
                     .model = self.model,
                     .thinking = self.thinkingOptions(request.thinking_level),
-                }, request.messages) catch return error.OutOfMemory;
+                }, .{
+                    .messages = request.messages,
+                    .tools = tool_views,
+                    .system_prompt = request.system_prompt,
+                }) catch return error.OutOfMemory;
                 defer provider_request.deinit(self.allocator);
                 var transport = self.http_transport.transport();
                 const stream = transport.sendStreaming(provider_request) catch |err| switch (err) {
@@ -87,6 +93,18 @@ pub const OwnedModelClient = struct {
         if (self.provider_kind != .deepseek) return .{};
         if (level == .off) return .{ .type = .disabled };
         return .{ .type = .enabled, .reasoning_effort = @tagName(level) };
+    }
+
+    fn toolViews(self: *OwnedModelClient, tools: []const agent.tool.ToolSpec) error{OutOfMemory}![]provider.openai_compatible.ToolSpecView {
+        const views = try self.allocator.alloc(provider.openai_compatible.ToolSpecView, tools.len);
+        for (tools, 0..) |tool, i| {
+            views[i] = .{
+                .name = tool.name,
+                .description = tool.description,
+                .schema_json = tool.schema_json,
+            };
+        }
+        return views;
     }
 };
 

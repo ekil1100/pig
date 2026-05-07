@@ -10,6 +10,18 @@ const config_mod = @import("config.zig");
 pub const OpenAiCompatibleConfig = config_mod.OpenAiCompatibleConfig;
 const ParseError = errors.ProviderParseError || events.EventSinkError || transport.ResponseStreamError || error{OutOfMemory};
 
+pub const ToolSpecView = struct {
+    name: []const u8,
+    description: []const u8,
+    schema_json: []const u8 = "{}",
+};
+
+pub const ChatCompletionsInput = struct {
+    messages: []const messages.MessageView,
+    tools: []const ToolSpecView = &.{},
+    system_prompt: ?[]const u8 = null,
+};
+
 const ToolState = struct {
     active: bool = false,
     started: bool = false,
@@ -117,12 +129,16 @@ const ParserState = struct {
     fn handleDelta(self: *ParserState, delta: std.json.Value) ParseError!void {
         if (objectGet(delta, "role")) |role_value| if (role_value == .string and std.mem.eql(u8, role_value.string, "assistant")) try self.ensureStart();
         if (objectGet(delta, "content")) |content| if (content == .string) {
-            try self.ensureStart();
-            try self.sink.emit(.{ .text_delta = .{ .text = content.string } });
+            if (content.string.len > 0) {
+                try self.ensureStart();
+                try self.sink.emit(.{ .text_delta = .{ .text = content.string } });
+            }
         };
         if (objectGet(delta, "reasoning_content")) |reasoning| if (reasoning == .string) {
-            try self.ensureStart();
-            try self.sink.emit(.{ .thinking_delta = .{ .text = reasoning.string } });
+            if (reasoning.string.len > 0) {
+                try self.ensureStart();
+                try self.sink.emit(.{ .thinking_delta = .{ .text = reasoning.string } });
+            }
         };
         if (objectGet(delta, "tool_calls")) |calls| {
             try self.ensureStart();
@@ -176,14 +192,14 @@ const ParserState = struct {
     }
 };
 
-pub fn buildChatCompletionsRequest(allocator: std.mem.Allocator, config: OpenAiCompatibleConfig, input_messages: []const messages.MessageView) !transport.Request {
+pub fn buildChatCompletionsRequest(allocator: std.mem.Allocator, config: OpenAiCompatibleConfig, input: ChatCompletionsInput) !transport.Request {
     const url = try std.fmt.allocPrint(allocator, "{s}/chat/completions", .{std.mem.trimEnd(u8, config.base_url, "/")});
     errdefer allocator.free(url);
     const method = try allocator.dupe(u8, "POST");
     errdefer allocator.free(method);
     const auth = try std.fmt.allocPrint(allocator, "Bearer {s}", .{config.api_key});
     errdefer allocator.free(auth);
-    const body = try buildBody(allocator, config, input_messages);
+    const body = try buildBody(allocator, config, input);
     errdefer allocator.free(body);
 
     const headers = try allocator.alloc(transport.Header, 3);
@@ -208,7 +224,7 @@ pub fn buildChatCompletionsRequest(allocator: std.mem.Allocator, config: OpenAiC
     return .{ .method = method, .url = url, .headers = headers, .body = body };
 }
 
-fn buildBody(allocator: std.mem.Allocator, config: OpenAiCompatibleConfig, input_messages: []const messages.MessageView) error{OutOfMemory}![]u8 {
+fn buildBody(allocator: std.mem.Allocator, config: OpenAiCompatibleConfig, input: ChatCompletionsInput) error{OutOfMemory}![]u8 {
     var w: std.Io.Writer.Allocating = .init(allocator);
     defer w.deinit();
     w.writer.writeAll("{\"model\":") catch return error.OutOfMemory;
@@ -216,12 +232,53 @@ fn buildBody(allocator: std.mem.Allocator, config: OpenAiCompatibleConfig, input
     w.writer.writeAll(",\"stream\":true") catch return error.OutOfMemory;
     try writeThinkingOptions(&w.writer, config.thinking);
     w.writer.writeAll(",\"messages\":[") catch return error.OutOfMemory;
-    for (input_messages, 0..) |message, i| {
-        if (i > 0) w.writer.writeAll(",") catch return error.OutOfMemory;
+    var wrote_message = false;
+    if (input.system_prompt) |prompt| if (prompt.len > 0) {
+        try writeSystemMessage(&w.writer, prompt);
+        wrote_message = true;
+    };
+    for (input.messages) |message| {
+        if (wrote_message) w.writer.writeAll(",") catch return error.OutOfMemory;
         try writeMessage(&w.writer, message);
+        wrote_message = true;
     }
-    w.writer.writeAll("]}") catch return error.OutOfMemory;
+    w.writer.writeAll("]") catch return error.OutOfMemory;
+    if (input.tools.len > 0) try writeTools(allocator, &w.writer, input.tools);
+    w.writer.writeAll("}") catch return error.OutOfMemory;
     return w.toOwnedSlice() catch return error.OutOfMemory;
+}
+
+fn writeSystemMessage(writer: *std.Io.Writer, prompt: []const u8) error{OutOfMemory}!void {
+    writer.writeAll("{\"role\":\"system\",\"content\":") catch return error.OutOfMemory;
+    try writeJsonString(writer, prompt);
+    writer.writeAll("}") catch return error.OutOfMemory;
+}
+
+fn writeTools(allocator: std.mem.Allocator, writer: *std.Io.Writer, tools: []const ToolSpecView) error{OutOfMemory}!void {
+    writer.writeAll(",\"tools\":[") catch return error.OutOfMemory;
+    for (tools, 0..) |tool, i| {
+        if (i > 0) writer.writeAll(",") catch return error.OutOfMemory;
+        writer.writeAll("{\"type\":\"function\",\"function\":{\"name\":") catch return error.OutOfMemory;
+        try writeJsonString(writer, tool.name);
+        writer.writeAll(",\"description\":") catch return error.OutOfMemory;
+        try writeJsonString(writer, tool.description);
+        writer.writeAll(",\"parameters\":") catch return error.OutOfMemory;
+        const schema_json = (try validSchemaJson(allocator, tool.schema_json)) orelse "{}";
+        writer.writeAll(schema_json) catch return error.OutOfMemory;
+        writer.writeAll("}}") catch return error.OutOfMemory;
+    }
+    writer.writeAll("]") catch return error.OutOfMemory;
+}
+
+fn validSchemaJson(allocator: std.mem.Allocator, schema_json: []const u8) error{OutOfMemory}!?[]const u8 {
+    if (schema_json.len == 0) return null;
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, schema_json, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return null,
+    };
+    defer parsed.deinit();
+    if (parsed.value != .object) return null;
+    return schema_json;
 }
 
 fn writeThinkingOptions(writer: *std.Io.Writer, thinking: config_mod.ThinkingOptions) error{OutOfMemory}!void {

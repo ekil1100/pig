@@ -2,7 +2,6 @@ const std = @import("std");
 const args = @import("args.zig");
 const commands = @import("commands.zig");
 const agent = @import("../core/agent/mod.zig");
-const provider = @import("../provider/mod.zig");
 const tui = @import("../tui/mod.zig");
 
 pub const InteractiveStatus = enum { ok, failure, internal };
@@ -10,6 +9,7 @@ pub const InteractiveStatus = enum { ok, failure, internal };
 pub const Context = struct {
     allocator: std.mem.Allocator,
     model_client: ?agent.ModelClient = null,
+    tool_registry: agent.ToolRegistry = .{},
     system_prompt: ?[]const u8 = null,
     reload_hook: ?ReloadHook = null,
     model_switch_hook: ?ModelSwitchHook = null,
@@ -64,7 +64,7 @@ pub const ModelSwitchHook = struct {
     }
 };
 
-pub const InteractiveEventKind = enum { user, assistant, tool, error_item, status };
+pub const InteractiveEventKind = enum { user, assistant, thinking, tool, error_item, status };
 
 const TranscriptItem = struct {
     kind: InteractiveEventKind,
@@ -257,6 +257,13 @@ pub const InteractiveApp = struct {
         try self.transcript.items[self.transcript.items.len - 1].text.appendSlice(self.allocator, text);
     }
 
+    fn appendToLastThinking(self: *InteractiveApp, text: []const u8) !void {
+        if (self.transcript.items.len == 0 or self.transcript.items[self.transcript.items.len - 1].kind != .thinking) {
+            try self.appendItem(.thinking, "", true);
+        }
+        try self.transcript.items[self.transcript.items.len - 1].text.appendSlice(self.allocator, text);
+    }
+
     fn markAssistantDone(self: *InteractiveApp) void {
         if (self.transcript.items.len == 0) return;
         const last = &self.transcript.items[self.transcript.items.len - 1];
@@ -288,6 +295,7 @@ pub const InteractiveApp = struct {
             const prefix = switch (item.kind) {
                 .user => "you: ",
                 .assistant => "pig: ",
+                .thinking => "thinking: ",
                 .tool => "tool: ",
                 .error_item => "error: ",
                 .status => "status: ",
@@ -612,6 +620,7 @@ const ActiveTurn = struct {
             .allocator = turn.context.allocator,
             .state = &turn.app.state,
             .model = turn.model,
+            .tools = turn.context.tool_registry,
             .event_sink = sink.sink(),
             .abort_signal = .{ .ptr = turn, .load_fn = loadAbort },
         };
@@ -677,6 +686,7 @@ fn applyQueuedEvent(app: *InteractiveApp, event: QueuedInteractiveEvent) !void {
                 try app.appendToLastAssistant(event.text.items);
             }
         },
+        .thinking => try app.appendToLastThinking(event.text.items),
         .tool => try app.appendItem(.tool, event.text.items, event.is_streaming),
         .error_item => try app.appendItem(.error_item, event.text.items, event.is_streaming),
         .status => try app.appendItem(.status, event.text.items, event.is_streaming),
@@ -701,21 +711,83 @@ const QueueSink = struct {
 
     fn handle(self: *QueueSink, event: agent.AgentEvent) !void {
         switch (event) {
-            .message_start => |start| if (start.role == provider.Role.assistant) try self.queue.push(.assistant, "", true),
-            .message_delta => |delta| if (delta.text_delta) |text| try self.queue.push(.assistant, text, true),
-            .message_end => try self.queue.push(.assistant, "", false),
-            .tool_execution_start => |tool_event| try self.queue.push(.tool, tool_event.name, true),
-            .tool_execution_delta => |delta| try self.queue.push(.tool, delta.message, true),
-            .tool_execution_end => |tool_event| {
-                const text = if (tool_event.is_error) "failed" else "done";
-                try self.queue.push(.tool, text, false);
+            .message_start => {},
+            .message_delta => |delta| {
+                if (delta.thinking_delta) |text| try self.queue.push(.thinking, text, true);
+                if (delta.text_delta) |text| try self.queue.push(.assistant, text, true);
             },
+            .message_end => try self.queue.push(.assistant, "", false),
+            .tool_execution_start => |tool_event| try pushToolStart(self.queue, self.queue.allocator, tool_event.name, tool_event.arguments_json),
+            .tool_execution_delta => |delta| try self.queue.push(.tool, delta.message, true),
+            .tool_execution_end => |tool_event| if (tool_event.is_error) try pushToolError(self.queue, self.queue.allocator, tool_event.content_json),
             .error_event => |err| try self.queue.push(.error_item, err.message, false),
             .abort => try self.queue.push(.status, "aborted", false),
             else => {},
         }
     }
 };
+
+pub fn toolStartText(allocator: std.mem.Allocator, name: []const u8, arguments_json: []const u8) ![]const u8 {
+    const detail = try toolDetail(allocator, name, arguments_json);
+    defer allocator.free(detail);
+    if (detail.len == 0) return try allocator.dupe(u8, name);
+    return try std.fmt.allocPrint(allocator, "{s} {s}", .{ name, detail });
+}
+
+fn toolDetail(allocator: std.mem.Allocator, name: []const u8, arguments_json: []const u8) ![]const u8 {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, arguments_json, .{}) catch return try allocator.dupe(u8, "");
+    defer parsed.deinit();
+    if (parsed.value != .object) return try allocator.dupe(u8, "");
+    const object = parsed.value.object;
+    if (std.mem.eql(u8, name, "bash")) return try allocator.dupe(u8, jsonString(object.get("command")) orelse "");
+    if (std.mem.eql(u8, name, "grep")) {
+        const pattern = jsonString(object.get("pattern")) orelse "";
+        const path = jsonString(object.get("path")) orelse ".";
+        if (pattern.len == 0) return try allocator.dupe(u8, path);
+        return try std.fmt.allocPrint(allocator, "{s} in {s}", .{ pattern, path });
+    }
+    if (std.mem.eql(u8, name, "find")) {
+        const pattern = jsonString(object.get("pattern")) orelse "";
+        const path = jsonString(object.get("path")) orelse ".";
+        if (pattern.len == 0) return try allocator.dupe(u8, path);
+        return try std.fmt.allocPrint(allocator, "{s} in {s}", .{ pattern, path });
+    }
+    return try allocator.dupe(u8, jsonString(object.get("path")) orelse "");
+}
+
+pub fn toolErrorText(allocator: std.mem.Allocator, content_json: []const u8) ![]const u8 {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, content_json, .{}) catch return try allocator.dupe(u8, "error");
+    defer parsed.deinit();
+    if (parsed.value != .object) return try allocator.dupe(u8, "error");
+    const object = parsed.value.object;
+    if (object.get("error")) |error_value| {
+        if (error_value == .object) {
+            if (jsonString(error_value.object.get("message"))) |message| return try allocator.dupe(u8, message);
+            if (jsonString(error_value.object.get("code"))) |code| return try allocator.dupe(u8, code);
+        }
+        if (error_value == .string) return try allocator.dupe(u8, error_value.string);
+    }
+    return try allocator.dupe(u8, "error");
+}
+
+fn jsonString(value: ?std.json.Value) ?[]const u8 {
+    if (value) |v| if (v == .string) return v.string;
+    return null;
+}
+
+fn pushToolStart(queue: *SharedInteractiveEventQueue, allocator: std.mem.Allocator, name: []const u8, arguments_json: []const u8) !void {
+    const text = try toolStartText(allocator, name, arguments_json);
+    defer allocator.free(text);
+    try queue.push(.tool, text, true);
+}
+
+fn pushToolError(queue: *SharedInteractiveEventQueue, allocator: std.mem.Allocator, content_json: []const u8) !void {
+    const reason = try toolErrorText(allocator, content_json);
+    defer allocator.free(reason);
+    const text = try std.fmt.allocPrint(allocator, "error {s}", .{reason});
+    defer allocator.free(text);
+    try queue.push(.tool, text, false);
+}
 
 fn handleReload(context: Context, app: *InteractiveApp) !void {
     const hook = context.reload_hook orelse {
@@ -834,6 +906,7 @@ fn runTurn(config: args.RunConfig, context: Context, app: *InteractiveApp, model
         .allocator = context.allocator,
         .state = &app.state,
         .model = model,
+        .tools = context.tool_registry,
         .event_sink = sink.sink(),
         .abort_flag = &app.worker.abort_requested,
     };
@@ -849,7 +922,6 @@ fn renderApp(app: *InteractiveApp, output: *std.Io.Writer) !void {
     const bytes = try tui.render.renderFull(app.allocator, &frame);
     defer app.allocator.free(bytes);
     try output.writeAll(bytes);
-    try output.writeAll("\n");
 }
 
 const InteractiveSink = struct {
@@ -868,13 +940,23 @@ const InteractiveSink = struct {
 
     fn handle(self: *InteractiveSink, event: agent.AgentEvent) !void {
         switch (event) {
-            .message_start => |start| if (start.role == provider.Role.assistant) try self.app.appendItem(.assistant, "", true),
-            .message_delta => |delta| if (delta.text_delta) |text| try self.app.appendToLastAssistant(text),
+            .message_start => {},
+            .message_delta => |delta| {
+                if (delta.thinking_delta) |text| try self.app.appendToLastThinking(text);
+                if (delta.text_delta) |text| try self.app.appendToLastAssistant(text);
+            },
             .message_end => self.app.markAssistantDone(),
-            .tool_execution_start => |tool| try self.app.appendItem(.tool, tool.name, true),
+            .tool_execution_start => |tool| {
+                const text = try toolStartText(self.app.allocator, tool.name, tool.arguments_json);
+                defer self.app.allocator.free(text);
+                try self.app.appendItem(.tool, text, true);
+            },
             .tool_execution_delta => |delta| try self.app.appendItem(.tool, delta.message, true),
-            .tool_execution_end => |tool| {
-                const text = if (tool.is_error) "failed" else "done";
+            .tool_execution_end => |tool| if (tool.is_error) {
+                const reason = try toolErrorText(self.app.allocator, tool.content_json);
+                defer self.app.allocator.free(reason);
+                const text = try std.fmt.allocPrint(self.app.allocator, "error {s}", .{reason});
+                defer self.app.allocator.free(text);
                 try self.app.appendItem(.tool, text, false);
             },
             .error_event => |err| try self.app.appendItem(.error_item, err.message, false),

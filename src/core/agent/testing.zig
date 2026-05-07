@@ -8,6 +8,7 @@ pub const CollectedAgentEvent = struct {
     status: ?@import("state.zig").AgentStatus = null,
     role: ?provider.Role = null,
     text_delta: ?[]const u8 = null,
+    thinking_delta: ?[]const u8 = null,
     stop_reason: ?[]const u8 = null,
     id: ?[]const u8 = null,
     name: ?[]const u8 = null,
@@ -19,6 +20,7 @@ pub const CollectedAgentEvent = struct {
 
     pub fn deinit(self: CollectedAgentEvent, allocator: std.mem.Allocator) void {
         if (self.text_delta) |v| allocator.free(v);
+        if (self.thinking_delta) |v| allocator.free(v);
         if (self.stop_reason) |v| allocator.free(v);
         if (self.id) |v| allocator.free(v);
         if (self.name) |v| allocator.free(v);
@@ -63,6 +65,7 @@ pub const AgentEventCollector = struct {
             .message_start => |v| collected.role = v.role,
             .message_delta => |v| {
                 collected.text_delta = try self.dupeOpt(v.text_delta);
+                collected.thinking_delta = try self.dupeOpt(v.thinking_delta);
                 collected.stop_reason = try self.dupeOpt(v.stop_reason);
             },
             .message_end => |v| collected.role = v.role,

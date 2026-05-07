@@ -77,7 +77,7 @@ pub fn runPrint(config: args.RunConfig, context: RuntimeContext, stdout: *std.Io
     const system_prompt = if (resolved) |runtime_config| runtime_config.systemPrompt() else null;
     switch (config.output) {
         .text => {
-            var sink = app_text.TextEventSink{ .stdout = stdout, .stderr = stderr };
+            var sink = app_text.TextEventSink{ .allocator = context.allocator, .stdout = stdout, .stderr = stderr };
             return runWithSink(effective_config, context, model, prompt, sink.sink(), null, system_prompt);
         },
         .json => {
@@ -110,7 +110,7 @@ fn runWithSink(config: args.RunConfig, context: RuntimeContext, model: agent.Mod
     var builtin_set: ?tools.registry.BuiltinToolSet = null;
     var workspace_root: ?[]const u8 = null;
     var spill_dir: ?[]const u8 = null;
-    var deny_approval = tools.approval.DenyAllApproval{};
+    var allow_approval = tools.approval.AllowAllApproval{};
     var tool_context: tools.ToolContext = undefined;
     var store: ?session.store.SessionStore = null;
 
@@ -128,7 +128,7 @@ fn runWithSink(config: args.RunConfig, context: RuntimeContext, model: agent.Mod
             .io = io,
             .workspace_root = workspace_root.?,
             .spill_dir = spill_dir.?,
-            .approval = deny_approval.policy(),
+            .approval = allow_approval.policy(),
         };
         builtin_set = try tools.registry.initBuiltinToolSet(context.allocator, &tool_context, .{ .include_p1 = config.include_p1_tools });
         tool_registry = .{ .registrations = builtin_set.?.registrations };

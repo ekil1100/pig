@@ -49,7 +49,7 @@ pub fn main(init: std.process.Init) !void {
         .base_url = env.reader().get("PIG_OPENAI_COMPAT_BASE_URL").?,
         .api_key = env.reader().get("PIG_OPENAI_COMPAT_API_KEY").?,
         .model = env.reader().get("PIG_OPENAI_COMPAT_MODEL").?,
-    }, &messages);
+    }, .{ .messages = &messages });
     defer request.deinit(allocator);
 
     var http_transport = pig.provider.transport.HttpTransport{ .allocator = allocator, .io = io };

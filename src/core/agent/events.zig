@@ -25,7 +25,7 @@ pub const AgentEnd = struct { status: state.AgentStatus };
 pub const TurnStart = struct { user_text: []const u8 };
 pub const TurnEnd = struct { status: state.AgentStatus };
 pub const MessageStart = struct { role: provider.Role };
-pub const MessageDelta = struct { text_delta: ?[]const u8 = null, stop_reason: ?[]const u8 = null };
+pub const MessageDelta = struct { text_delta: ?[]const u8 = null, thinking_delta: ?[]const u8 = null, stop_reason: ?[]const u8 = null };
 pub const MessageEnd = struct { role: provider.Role };
 pub const ToolExecutionStart = struct { id: []const u8, name: []const u8, arguments_json: []const u8 };
 pub const ToolExecutionDelta = struct { id: []const u8, message: []const u8 };

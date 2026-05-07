@@ -56,6 +56,7 @@ fn writeEvent(writer: *std.Io.Writer, session_id: []const u8, event: agent.Agent
         },
         .message_delta => |v| {
             try writePreamble(writer, "message_delta", session_id);
+            if (v.thinking_delta) |text| try writeFieldString(writer, "thinking_delta", text);
             if (v.text_delta) |text| try writeFieldString(writer, "text_delta", text);
             if (v.stop_reason) |reason| try writeFieldString(writer, "stop_reason", reason);
             writer.writeAll("}\n") catch return error.SinkRejectedEvent;

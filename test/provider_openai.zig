@@ -50,6 +50,31 @@ test "openai compatible reasoning content maps to thinking deltas" {
     try std.testing.expectEqualStrings("done", collector.events.items[2].text.?);
 }
 
+test "openai compatible parser skips empty content deltas" {
+    var collector = provider.testing.EventCollector.init(std.testing.allocator);
+    defer collector.deinit();
+
+    const bytes =
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n" ++
+        "data: {\"choices\":[{\"delta\":{\"content\":\"\"}}]}\n\n" ++
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"\"}}]}\n\n" ++
+        "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n" ++
+        "data: [DONE]\n\n";
+    try provider.openai_compatible.parseBytes(std.testing.allocator, bytes, collector.sink());
+
+    var text_count: usize = 0;
+    var thinking_count: usize = 0;
+    for (collector.events.items) |event| {
+        if (event.tag == .text_delta) {
+            text_count += 1;
+            try std.testing.expect(event.text.?.len > 0);
+        }
+        if (event.tag == .thinking_delta) thinking_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), text_count);
+    try std.testing.expectEqual(@as(usize, 0), thinking_count);
+}
+
 test "openai compatible usage and missing done behavior" {
     var usage_collector = provider.testing.EventCollector.init(std.testing.allocator);
     defer usage_collector.deinit();
@@ -83,7 +108,7 @@ test "openai request builder serializes thinking controls and reasoning replay" 
         .api_key = "test-deepseek-key",
         .model = "deepseek-v4-flash",
         .thinking = .{ .type = .enabled, .reasoning_effort = "high" },
-    }, &messages);
+    }, .{ .messages = &messages });
     defer req.deinit(std.testing.allocator);
 
     try std.testing.expect(std.mem.indexOf(u8, req.body, "\"thinking\":{\"type\":\"enabled\"}") != null);
@@ -109,7 +134,7 @@ test "openai request builder omits final-answer reasoning replay" {
         .api_key = "test-deepseek-key",
         .model = "deepseek-v4-flash",
         .thinking = .{ .type = .enabled, .reasoning_effort = "high" },
-    }, &messages);
+    }, .{ .messages = &messages });
     defer req.deinit(std.testing.allocator);
 
     try std.testing.expect(std.mem.indexOf(u8, req.body, "reasoning_content") == null);
@@ -125,7 +150,7 @@ test "openai request builder can explicitly disable provider thinking" {
         .api_key = "test-deepseek-key",
         .model = "deepseek-v4-flash",
         .thinking = .{ .type = .disabled, .reasoning_effort = "high" },
-    }, &messages);
+    }, .{ .messages = &messages });
     defer req.deinit(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, req.body, "\"thinking\":{\"type\":\"disabled\"}") != null);
     try std.testing.expect(std.mem.indexOf(u8, req.body, "reasoning_effort") == null);
@@ -138,7 +163,7 @@ test "openai request builder creates streaming chat completions request" {
         .base_url = "https://example.invalid/v1",
         .api_key = "test-openai-key",
         .model = "test-model",
-    }, &messages);
+    }, .{ .messages = &messages });
     defer req.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings("POST", req.method);
@@ -146,6 +171,66 @@ test "openai request builder creates streaming chat completions request" {
     try std.testing.expect(std.mem.indexOf(u8, req.body, "\"stream\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, req.body, "test-openai-key") == null);
     try std.testing.expect(req.headerValue("Authorization") != null);
+}
+
+test "openai request builder serializes system prompt and tool specs" {
+    const blocks = [_]provider.ContentBlockView{.{ .text = .{ .text = "list files" } }};
+    const messages = [_]provider.MessageView{.{ .role = .user, .content = &blocks }};
+    const tool_specs = [_]provider.openai_compatible.ToolSpecView{.{
+        .name = "ls",
+        .description = "List workspace directory entries",
+        .schema_json = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"additionalProperties\":false}",
+    }};
+    var req = try provider.openai_compatible.buildChatCompletionsRequest(std.testing.allocator, .{
+        .base_url = "https://example.invalid/v1",
+        .api_key = "test-openai-key",
+        .model = "test-model",
+    }, .{
+        .messages = &messages,
+        .tools = &tool_specs,
+        .system_prompt = "You are Pig.",
+    });
+    defer req.deinit(std.testing.allocator);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, req.body, .{});
+    defer parsed.deinit();
+    const root = parsed.value.object;
+    const message_items = root.get("messages").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), message_items.len);
+    try std.testing.expectEqualStrings("system", message_items[0].object.get("role").?.string);
+    try std.testing.expectEqualStrings("You are Pig.", message_items[0].object.get("content").?.string);
+    try std.testing.expectEqualStrings("user", message_items[1].object.get("role").?.string);
+
+    const tools = root.get("tools").?.array.items;
+    try std.testing.expectEqual(@as(usize, 1), tools.len);
+    const function = tools[0].object.get("function").?.object;
+    try std.testing.expectEqualStrings("ls", function.get("name").?.string);
+    try std.testing.expectEqualStrings("List workspace directory entries", function.get("description").?.string);
+    try std.testing.expectEqualStrings("object", function.get("parameters").?.object.get("type").?.string);
+}
+
+test "openai request builder falls back for invalid tool schema" {
+    const blocks = [_]provider.ContentBlockView{.{ .text = .{ .text = "list files" } }};
+    const messages = [_]provider.MessageView{.{ .role = .user, .content = &blocks }};
+    const tool_specs = [_]provider.openai_compatible.ToolSpecView{.{
+        .name = "bad",
+        .description = "Bad schema",
+        .schema_json = "\"not an object\"",
+    }};
+    var req = try provider.openai_compatible.buildChatCompletionsRequest(std.testing.allocator, .{
+        .base_url = "https://example.invalid/v1",
+        .api_key = "test-openai-key",
+        .model = "test-model",
+    }, .{
+        .messages = &messages,
+        .tools = &tool_specs,
+    });
+    defer req.deinit(std.testing.allocator);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, req.body, .{});
+    defer parsed.deinit();
+    const parameters = parsed.value.object.get("tools").?.array.items[0].object.get("function").?.object.get("parameters").?.object;
+    try std.testing.expectEqual(@as(usize, 0), parameters.count());
 }
 
 test "openai parser handles provider errors and multiple tool indexes" {
@@ -178,7 +263,7 @@ test "openai request builder JSON-escapes model and content" {
         .base_url = "https://example.invalid/v1/",
         .api_key = "test-openai-key",
         .model = "test\"model",
-    }, &messages);
+    }, .{ .messages = &messages });
     defer req.deinit(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, req.body, "test\\\"model") != null);
     try std.testing.expect(std.mem.indexOf(u8, req.body, "hello \\\"zig\\\"\\n") != null);
@@ -187,11 +272,16 @@ test "openai request builder JSON-escapes model and content" {
 fn buildEscapedRequestWithAllocator(allocator: std.mem.Allocator) !void {
     const blocks = [_]provider.ContentBlockView{.{ .text = .{ .text = "hello \"zig\"\n\x01" } }};
     const messages = [_]provider.MessageView{.{ .role = .user, .content = &blocks }};
+    const tool_specs = [_]provider.openai_compatible.ToolSpecView{.{
+        .name = "read",
+        .description = "Read a file",
+        .schema_json = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}",
+    }};
     var req = try provider.openai_compatible.buildChatCompletionsRequest(allocator, .{
         .base_url = "https://example.invalid/v1/",
         .api_key = "test-openai-key",
         .model = "test\"model",
-    }, &messages);
+    }, .{ .messages = &messages, .tools = &tool_specs, .system_prompt = "system" });
     defer req.deinit(allocator);
 }
 

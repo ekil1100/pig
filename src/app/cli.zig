@@ -8,6 +8,7 @@ const model_factory = @import("model_factory.zig");
 const app_runtime = @import("runtime.zig");
 const provider = @import("../provider/mod.zig");
 const resources = @import("../resources/mod.zig");
+const tools = @import("../tools/mod.zig");
 const paths = @import("../util/paths.zig");
 const tui = @import("../tui/mod.zig");
 
@@ -197,6 +198,35 @@ fn runInteractive(config: parsed_args.RunConfig, context: Context, stdout: *std.
         break :blk null;
     };
 
+    var tool_registry = agent.ToolRegistry{};
+    var builtin_set: ?tools.registry.BuiltinToolSet = null;
+    var workspace_root: ?[]const u8 = null;
+    var spill_dir: ?[]const u8 = null;
+    var allow_approval = tools.approval.AllowAllApproval{};
+    var tool_context: tools.ToolContext = undefined;
+    if (effectiveToolsEnabled(resolved, config)) {
+        if (context.io) |active_io| {
+            workspace_root = try resolveInteractiveWorkspaceRoot(context.allocator, active_io, config.cwd);
+            errdefer if (workspace_root) |path| context.allocator.free(path);
+            spill_dir = try std.fs.path.join(context.allocator, &.{ workspace_root.?, ".pig-spill" });
+            errdefer if (spill_dir) |path| context.allocator.free(path);
+            tool_context = .{
+                .allocator = context.allocator,
+                .io = active_io,
+                .workspace_root = workspace_root.?,
+                .spill_dir = spill_dir.?,
+                .approval = allow_approval.policy(),
+            };
+            builtin_set = try tools.registry.initBuiltinToolSet(context.allocator, &tool_context, .{ .include_p1 = effectiveIncludeP1Tools(resolved, config) });
+            tool_registry = .{ .registrations = builtin_set.?.registrations };
+        }
+    }
+    defer {
+        if (builtin_set) |*set| set.deinit(context.allocator);
+        if (spill_dir) |path| context.allocator.free(path);
+        if (workspace_root) |path| context.allocator.free(path);
+    }
+
     var reload_context = ReloadContext{ .cli_context = context, .config = config };
     const reload_hook = app_interactive.ReloadHook{ .ptr = &reload_context, .reload_fn = ReloadContext.reload };
     var model_switch_context = ModelSwitchContext{ .cli_context = context, .config = config };
@@ -206,6 +236,7 @@ fn runInteractive(config: parsed_args.RunConfig, context: Context, stdout: *std.
     const interactive_context = app_interactive.Context{
         .allocator = context.allocator,
         .model_client = model,
+        .tool_registry = tool_registry,
         .system_prompt = if (resolved) |runtime_config| runtime_config.systemPrompt() else null,
         .reload_hook = if (context.io != null) reload_hook else null,
         .model_switch_hook = if (context.io != null) model_switch_hook else null,
@@ -228,6 +259,24 @@ fn runInteractive(config: parsed_args.RunConfig, context: Context, stdout: *std.
         .failure => .failure,
         .internal => .internal,
     };
+}
+
+fn effectiveToolsEnabled(resolved: ?config_runtime.ResolvedRuntimeConfig, config: parsed_args.RunConfig) bool {
+    return if (resolved) |runtime_config| runtime_config.effective_run_config.tools_enabled else config.tools_enabled;
+}
+
+fn effectiveIncludeP1Tools(resolved: ?config_runtime.ResolvedRuntimeConfig, config: parsed_args.RunConfig) bool {
+    return if (resolved) |runtime_config| runtime_config.effective_run_config.include_p1_tools else config.include_p1_tools;
+}
+
+fn resolveInteractiveWorkspaceRoot(allocator: std.mem.Allocator, io: std.Io, cwd_arg: ?[]const u8) ![]const u8 {
+    if (cwd_arg) |cwd| {
+        if (std.fs.path.isAbsolute(cwd)) return try allocator.dupe(u8, cwd);
+        const base = try paths.cwd(allocator, io);
+        defer allocator.free(base);
+        return try std.fs.path.join(allocator, &.{ base, cwd });
+    }
+    return try paths.cwd(allocator, io);
 }
 
 const ReloadContext = struct {

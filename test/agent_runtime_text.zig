@@ -34,6 +34,39 @@ test "runtime completes no-tool text turn" {
     try std.testing.expectEqual(agent.state.AgentStatus.completed, collector.events.items[collector.events.items.len - 1].status.?);
 }
 
+test "runtime skips empty text and thinking deltas" {
+    const turn = [_]provider.ProviderEvent{
+        .{ .message_start = .{ .role = .assistant } },
+        .{ .text_delta = .{ .text = "" } },
+        .{ .thinking_delta = .{ .text = "" } },
+        .{ .text_delta = .{ .text = "visible" } },
+        .message_end,
+        .done,
+    };
+    const turns = [_][]const provider.ProviderEvent{&turn};
+    var model = agent.model_client.ScriptedModelClient{ .turns = &turns };
+    var state = agent.state.AgentState.init(std.testing.allocator, .{});
+    defer state.deinit();
+    var collector = agent.testing.AgentEventCollector.init(std.testing.allocator);
+    defer collector.deinit();
+    var runtime = runtimeWith(&state, model.client(), &collector);
+
+    try runtime.runUserText("hi");
+
+    var text_count: usize = 0;
+    var thinking_count: usize = 0;
+    for (collector.events.items) |event| {
+        if (event.tag == .message_delta and event.text_delta != null) {
+            text_count += 1;
+            try std.testing.expect(event.text_delta.?.len > 0);
+        }
+        if (event.tag == .message_delta and event.thinking_delta != null) thinking_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), text_count);
+    try std.testing.expectEqual(@as(usize, 0), thinking_count);
+    try std.testing.expectEqualStrings("visible", state.messages.items[1].content[0].text.text);
+}
+
 test "runtime repeated calls keep history and pair lifecycle" {
     const turn1 = [_]provider.ProviderEvent{ .{ .message_start = .{ .role = .assistant } }, .{ .text_delta = .{ .text = "one" } }, .message_end, .done };
     const turn2 = [_]provider.ProviderEvent{ .{ .message_start = .{ .role = .assistant } }, .{ .text_delta = .{ .text = "two" } }, .message_end, .done };

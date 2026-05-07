@@ -204,12 +204,15 @@ const ProviderBridge = struct {
         switch (event) {
             .message_start => |v| try self.runtime.event_sink.emit(.{ .message_start = .{ .role = v.role } }),
             .text_delta => |v| {
+                if (v.text.len == 0) return;
                 try self.runtime.state.stream.text.appendSlice(allocator, v.text);
                 try self.runtime.event_sink.emit(.{ .message_delta = .{ .text_delta = v.text } });
             },
             .thinking_delta => |v| {
+                if (v.text.len == 0 and v.signature_delta == null) return;
                 try self.runtime.state.stream.thinking.appendSlice(allocator, v.text);
                 if (v.signature_delta) |sig| try self.runtime.state.stream.thinking_signature.appendSlice(allocator, sig);
+                if (v.text.len > 0) try self.runtime.event_sink.emit(.{ .message_delta = .{ .thinking_delta = v.text } });
             },
             .message_delta => |v| if (v.stop_reason) |reason| try self.runtime.event_sink.emit(.{ .message_delta = .{ .stop_reason = reason } }),
             .message_end => try self.runtime.event_sink.emit(.{ .message_end = .{ .role = .assistant } }),

@@ -92,8 +92,75 @@ test "print mode exposes builtin tools to the model" {
 
     try std.testing.expectEqual(cli.ExitCode.ok, code);
     try std.testing.expectEqualStrings("read done", stdout.written());
-    try std.testing.expect(std.mem.indexOf(u8, stderr.written(), "tool: read") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr.written(), "tool: read main.txt") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr.written(), "hello from cli tool") == null);
     try std.testing.expectEqual(@as(usize, 4), model.last_tool_count);
+}
+
+test "print mode allows builtin bash tool" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(root);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, root);
+
+    const turn1 = [_]provider.ProviderEvent{
+        .{ .message_start = .{ .role = .assistant } },
+        .{ .tool_call_end = .{ .index = 0, .id = "call_1", .name = "bash", .arguments_json = "{\"command\":\"printf shell-ok\"}" } },
+        .message_end,
+        .done,
+    };
+    const turn2 = [_]provider.ProviderEvent{
+        .{ .message_start = .{ .role = .assistant } },
+        .{ .text_delta = .{ .text = "bash done" } },
+        .message_end,
+        .done,
+    };
+    const turns = [_][]const provider.ProviderEvent{ &turn1, &turn2 };
+    var model = agent.model_client.ScriptedModelClient{ .turns = &turns };
+
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const code = try cli.runWithContext(&.{ "--print", "run shell", "--cwd", root }, .{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .model_client = model.client(),
+    }, &stdout.writer, &stderr.writer);
+
+    try std.testing.expectEqual(cli.ExitCode.ok, code);
+    try std.testing.expectEqualStrings("bash done", stdout.written());
+    try std.testing.expect(std.mem.indexOf(u8, stderr.written(), "tool: bash printf shell-ok") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr.written(), "approval denied") == null);
+}
+
+test "print mode writes thinking to stderr" {
+    const turn = [_]provider.ProviderEvent{
+        .{ .message_start = .{ .role = .assistant } },
+        .{ .thinking_delta = .{ .text = "inspect" } },
+        .{ .text_delta = .{ .text = "answer" } },
+        .message_end,
+        .done,
+    };
+    const turns = [_][]const provider.ProviderEvent{&turn};
+    var model = agent.model_client.ScriptedModelClient{ .turns = &turns };
+
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const code = try cli.runWithContext(&.{ "--print", "hi", "--no-tools" }, .{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .model_client = model.client(),
+    }, &stdout.writer, &stderr.writer);
+
+    try std.testing.expectEqual(cli.ExitCode.ok, code);
+    try std.testing.expectEqualStrings("answer", stdout.written());
+    try std.testing.expect(std.mem.indexOf(u8, stderr.written(), "thinking: inspect") != null);
 }
 
 test "print mode without model client fails clearly" {

@@ -32,6 +32,63 @@ test "interactive mode runs scripted model and renders transcript" {
     try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "pig: hi there") != null);
 }
 
+test "interactive render does not append newline after cursor positioning" {
+    const turn = [_]provider.ProviderEvent{
+        .{ .message_start = .{ .role = .assistant } },
+        .{ .text_delta = .{ .text = "hi there" } },
+        .message_end,
+        .done,
+    };
+    const turns = [_][]const provider.ProviderEvent{&turn};
+    var model = agent.model_client.ScriptedModelClient{ .turns = &turns };
+
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const code = try cli.runWithContext(&.{ "--interactive", "--ephemeral", "--no-tools" }, .{
+        .allocator = std.testing.allocator,
+        .model_client = model.client(),
+        .interactive_input = "hello\rquit\r",
+        .terminal_size = .{ .width = 40, .height = 8 },
+    }, &stdout.writer, &stderr.writer);
+
+    try std.testing.expectEqual(cli.ExitCode.ok, code);
+    try std.testing.expectEqualStrings("", stderr.written());
+    try std.testing.expect(!std.mem.endsWith(u8, stdout.written(), "\n"));
+}
+
+test "interactive mode renders thinking separately and keeps user input visible" {
+    const turn = [_]provider.ProviderEvent{
+        .{ .message_start = .{ .role = .assistant } },
+        .{ .thinking_delta = .{ .text = "checking context" } },
+        .{ .text_delta = .{ .text = "done" } },
+        .message_end,
+        .done,
+    };
+    const turns = [_][]const provider.ProviderEvent{&turn};
+    var model = agent.model_client.ScriptedModelClient{ .turns = &turns };
+
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const code = try cli.runWithContext(&.{ "--interactive", "--ephemeral", "--no-tools" }, .{
+        .allocator = std.testing.allocator,
+        .model_client = model.client(),
+        .interactive_input = "hello\rquit\r",
+        .terminal_size = .{ .width = 80, .height = 10 },
+    }, &stdout.writer, &stderr.writer);
+
+    try std.testing.expectEqual(cli.ExitCode.ok, code);
+    try std.testing.expectEqualStrings("", stderr.written());
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "you: hello") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "thinking: checking context") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "pig: done") != null);
+}
+
 test "interactive mode preserves message history across turns" {
     const first = [_]provider.ProviderEvent{
         .{ .message_start = .{ .role = .assistant } },
@@ -65,6 +122,108 @@ test "interactive mode preserves message history across turns" {
     try std.testing.expectEqual(@as(usize, 3), model.last_message_count);
     try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "pig: first answer") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "pig: second answer") != null);
+}
+
+test "interactive mode executes builtin tools and renders tool result" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(root);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, root);
+    const readme_relative = try std.fs.path.join(std.testing.allocator, &.{ root, "README.md" });
+    defer std.testing.allocator.free(readme_relative);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = readme_relative, .data = "hello interactive tools\n" });
+    const cwd = try pig.util.paths.cwd(std.testing.allocator, std.testing.io);
+    defer std.testing.allocator.free(cwd);
+    const root_absolute = try std.fs.path.join(std.testing.allocator, &.{ cwd, root });
+    defer std.testing.allocator.free(root_absolute);
+    const readme_absolute = try std.fs.path.join(std.testing.allocator, &.{ root_absolute, "README.md" });
+    defer std.testing.allocator.free(readme_absolute);
+    const tool_args = try std.fmt.allocPrint(std.testing.allocator, "{{\"path\":\"{s}\"}}", .{readme_absolute});
+    defer std.testing.allocator.free(tool_args);
+
+    var first = [_]provider.ProviderEvent{
+        .{ .message_start = .{ .role = .assistant } },
+        .{ .tool_call_end = .{ .index = 0, .id = "call_1", .name = "read", .arguments_json = tool_args } },
+        .message_end,
+        .done,
+    };
+    const second = [_]provider.ProviderEvent{
+        .{ .message_start = .{ .role = .assistant } },
+        .{ .text_delta = .{ .text = "read complete" } },
+        .message_end,
+        .done,
+    };
+    const turns = [_][]const provider.ProviderEvent{ &first, &second };
+    var model = agent.model_client.ScriptedModelClient{ .turns = &turns };
+
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const code = try cli.runWithContext(&.{ "--interactive", "--ephemeral", "--cwd", root_absolute }, .{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .model_client = model.client(),
+        .interactive_input = "show readme\rquit\r",
+        .terminal_size = .{ .width = 120, .height = 24 },
+    }, &stdout.writer, &stderr.writer);
+
+    try std.testing.expectEqual(cli.ExitCode.ok, code);
+    try std.testing.expectEqualStrings("", stderr.written());
+    try std.testing.expectEqual(@as(usize, 2), model.request_count);
+    try std.testing.expect(model.last_tool_count > 0);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "you: show readme") != null);
+    const expected_tool_line = try std.fmt.allocPrint(std.testing.allocator, "tool: read {s}", .{readme_absolute});
+    defer std.testing.allocator.free(expected_tool_line);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), expected_tool_line) != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "path is outside workspace or invalid") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "hello interactive tools") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "read complete") != null);
+}
+
+test "interactive mode allows builtin bash execution" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(root);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, root);
+
+    const first = [_]provider.ProviderEvent{
+        .{ .message_start = .{ .role = .assistant } },
+        .{ .tool_call_end = .{ .index = 0, .id = "call_1", .name = "bash", .arguments_json = "{\"command\":\"printf shell-ok\"}" } },
+        .message_end,
+        .done,
+    };
+    const second = [_]provider.ProviderEvent{
+        .{ .message_start = .{ .role = .assistant } },
+        .{ .text_delta = .{ .text = "bash complete" } },
+        .message_end,
+        .done,
+    };
+    const turns = [_][]const provider.ProviderEvent{ &first, &second };
+    var model = agent.model_client.ScriptedModelClient{ .turns = &turns };
+
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const code = try cli.runWithContext(&.{ "--interactive", "--ephemeral", "--cwd", root }, .{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .model_client = model.client(),
+        .interactive_input = "run shell\rquit\r",
+        .terminal_size = .{ .width = 120, .height = 24 },
+    }, &stdout.writer, &stderr.writer);
+
+    try std.testing.expectEqual(cli.ExitCode.ok, code);
+    try std.testing.expectEqualStrings("", stderr.written());
+    try std.testing.expectEqual(@as(usize, 2), model.request_count);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "tool: bash printf shell-ok") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "tool: error approval denied") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "bash complete") != null);
 }
 
 test "interactive mode scrolls transcript with page keys" {
@@ -305,6 +464,26 @@ test "interactive app saturates repeated upward scroll" {
     try std.testing.expectEqual(std.math.maxInt(usize), app.scroll_offset);
 }
 
+test "interactive render keeps transcript order when transcript overflows" {
+    var app = pig.app.interactive.InteractiveApp.init(std.testing.allocator, .{ .width = 80, .height = 6 }, .{});
+    defer app.deinit();
+
+    try appendTranscriptForTest(&app, .user, "inspect this project");
+    try appendTranscriptForTest(&app, .assistant, "I will inspect the project.");
+    try appendTranscriptForTest(&app, .tool, "bash ls -la /tmp/project");
+    try appendTranscriptForTest(&app, .tool, "read /tmp/project/build.zig");
+    try appendTranscriptForTest(&app, .tool, "read /tmp/project/README.md");
+    try appendTranscriptForTest(&app, .tool, "read /tmp/project/src/main.zig");
+    try appendTranscriptForTest(&app, .assistant, "final answer");
+
+    var frame = try app.renderFrame();
+    defer frame.deinit();
+
+    try std.testing.expectEqualStrings("tool: bash ls -la /tmp/project", frame.lines.items[0]);
+    try std.testing.expect(frameContains(&frame, "pig: final answer"));
+    try std.testing.expect(!frameContains(&frame, "you: inspect this project"));
+}
+
 test "interactive event queue owns text and enforces capacity" {
     var queue = pig.app.interactive.InteractiveEventQueue.init(std.testing.allocator);
     defer queue.deinit();
@@ -323,4 +502,36 @@ test "interactive event queue owns text and enforces capacity" {
     try std.testing.expectEqualStrings("hello", event.text.items);
     try std.testing.expect(event.is_streaming);
     try std.testing.expect(queue.popFront() == null);
+}
+
+fn appendTranscriptForTest(app: *pig.app.interactive.InteractiveApp, kind: pig.app.interactive.InteractiveEventKind, text: []const u8) !void {
+    var item_text: std.ArrayList(u8) = .empty;
+    errdefer item_text.deinit(std.testing.allocator);
+    try item_text.appendSlice(std.testing.allocator, text);
+    try app.transcript.append(std.testing.allocator, .{ .kind = kind, .text = item_text, .is_streaming = false });
+}
+
+fn frameContains(frame: *const pig.tui.render.Frame, needle: []const u8) bool {
+    for (frame.lines.items) |line| {
+        if (std.mem.indexOf(u8, line, needle) != null) return true;
+    }
+    return false;
+}
+
+test "interactive tool formatting is semantic" {
+    const bash = try pig.app.interactive.toolStartText(std.testing.allocator, "bash", "{\"command\":\"ls -la\"}");
+    defer std.testing.allocator.free(bash);
+    try std.testing.expectEqualStrings("bash ls -la", bash);
+
+    const read = try pig.app.interactive.toolStartText(std.testing.allocator, "read", "{\"path\":\"src/main.zig\"}");
+    defer std.testing.allocator.free(read);
+    try std.testing.expectEqualStrings("read src/main.zig", read);
+
+    const grep = try pig.app.interactive.toolStartText(std.testing.allocator, "grep", "{\"pattern\":\"TODO\",\"path\":\"src\"}");
+    defer std.testing.allocator.free(grep);
+    try std.testing.expectEqualStrings("grep TODO in src", grep);
+
+    const reason = try pig.app.interactive.toolErrorText(std.testing.allocator, "{\"ok\":false,\"error\":{\"code\":\"approval_denied\",\"message\":\"approval denied\"}}");
+    defer std.testing.allocator.free(reason);
+    try std.testing.expectEqualStrings("approval denied", reason);
 }
