@@ -67,6 +67,60 @@ test "interactive mode preserves message history across turns" {
     try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "pig: second answer") != null);
 }
 
+test "interactive mode scrolls transcript with page keys" {
+    const turn = [_]provider.ProviderEvent{
+        .{ .message_start = .{ .role = .assistant } },
+        .{ .text_delta = .{ .text = "line1\nline2\nline3\nline4\nline5" } },
+        .message_end,
+        .done,
+    };
+    const turns = [_][]const provider.ProviderEvent{&turn};
+    var model = agent.model_client.ScriptedModelClient{ .turns = &turns };
+
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const code = try cli.runWithContext(&.{ "--interactive", "--ephemeral", "--no-tools" }, .{
+        .allocator = std.testing.allocator,
+        .model_client = model.client(),
+        .interactive_input = "hello\r\x1b[5~quit\r",
+        .terminal_size = .{ .width = 80, .height = 4 },
+    }, &stdout.writer, &stderr.writer);
+
+    try std.testing.expectEqual(cli.ExitCode.ok, code);
+    try std.testing.expectEqualStrings("", stderr.written());
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "pig: line1") != null);
+}
+
+test "interactive mode scrolls transcript with mouse wheel" {
+    const turn = [_]provider.ProviderEvent{
+        .{ .message_start = .{ .role = .assistant } },
+        .{ .text_delta = .{ .text = "line1\nline2\nline3\nline4\nline5" } },
+        .message_end,
+        .done,
+    };
+    const turns = [_][]const provider.ProviderEvent{&turn};
+    var model = agent.model_client.ScriptedModelClient{ .turns = &turns };
+
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const code = try cli.runWithContext(&.{ "--interactive", "--ephemeral", "--no-tools" }, .{
+        .allocator = std.testing.allocator,
+        .model_client = model.client(),
+        .interactive_input = "hello\r\x1b[<64;10;20Mquit\r",
+        .terminal_size = .{ .width = 80, .height = 4 },
+    }, &stdout.writer, &stderr.writer);
+
+    try std.testing.expectEqual(cli.ExitCode.ok, code);
+    try std.testing.expectEqualStrings("", stderr.written());
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "pig: line1") != null);
+}
+
 test "interactive mode reports missing model without unsupported skeleton" {
     var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer stdout.deinit();
@@ -239,6 +293,16 @@ test "interactive app preserves editor input while busy and supports abort" {
 
     const result = try app.handleInput(.{ .kind = .ctrl, .ctrl = 'c' });
     try std.testing.expectEqual(pig.tui.editor.SubmitResult.abort, result);
+}
+
+test "interactive app saturates repeated upward scroll" {
+    var app = pig.app.interactive.InteractiveApp.init(std.testing.allocator, .{ .width = 40, .height = 8 }, .{});
+    defer app.deinit();
+    app.scroll_offset = std.math.maxInt(usize) - 1;
+
+    _ = try app.handleInput(.{ .kind = .mouse_scroll, .mouse_scroll = .up });
+
+    try std.testing.expectEqual(std.math.maxInt(usize), app.scroll_offset);
 }
 
 test "interactive event queue owns text and enforces capacity" {

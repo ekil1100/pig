@@ -14,6 +14,7 @@ pub const KeyKind = enum {
     end,
     page_up,
     page_down,
+    mouse_scroll,
     tab,
     paste_start,
     paste_end,
@@ -26,6 +27,7 @@ pub const KeyEvent = struct {
     text: ?[]const u8 = null,
     ctrl: ?u8 = null,
     arrow: ?Direction = null,
+    mouse_scroll: ?Direction = null,
 };
 
 pub fn decodeAll(allocator: std.mem.Allocator, bytes: []const u8) ![]KeyEvent {
@@ -91,6 +93,8 @@ fn decodeEscape(allocator: std.mem.Allocator, bytes: []const u8, events: *std.Ar
         try events.append(allocator, .{ .kind = .paste_end });
         return 6;
     }
+    if (try decodeSgrMouse(allocator, bytes, events)) |consumed| return consumed;
+    if (try decodeLegacyMouse(allocator, bytes, events)) |consumed| return consumed;
     if (std.mem.startsWith(u8, bytes, "\x1b[A")) {
         try events.append(allocator, .{ .kind = .arrow, .arrow = .up });
         return 3;
@@ -119,8 +123,54 @@ fn decodeEscape(allocator: std.mem.Allocator, bytes: []const u8, events: *std.Ar
         try events.append(allocator, .{ .kind = .delete });
         return 4;
     }
+    if (std.mem.startsWith(u8, bytes, "\x1b[5~")) {
+        try events.append(allocator, .{ .kind = .page_up });
+        return 4;
+    }
+    if (std.mem.startsWith(u8, bytes, "\x1b[6~")) {
+        try events.append(allocator, .{ .kind = .page_down });
+        return 4;
+    }
     try events.append(allocator, .{ .kind = .escape });
     return 1;
+}
+
+fn decodeSgrMouse(allocator: std.mem.Allocator, bytes: []const u8, events: *std.ArrayList(KeyEvent)) !?usize {
+    if (!std.mem.startsWith(u8, bytes, "\x1b[<")) return null;
+    var i: usize = 3;
+    const button_start = i;
+    while (i < bytes.len and std.ascii.isDigit(bytes[i])) i += 1;
+    if (i == button_start or i >= bytes.len or bytes[i] != ';') return null;
+    const button = std.fmt.parseInt(u16, bytes[button_start..i], 10) catch return null;
+    i += 1;
+    while (i < bytes.len and std.ascii.isDigit(bytes[i])) i += 1;
+    if (i >= bytes.len or bytes[i] != ';') return null;
+    i += 1;
+    while (i < bytes.len and std.ascii.isDigit(bytes[i])) i += 1;
+    if (i >= bytes.len or (bytes[i] != 'M' and bytes[i] != 'm')) return null;
+
+    const direction = wheelDirection(button) orelse return i + 1;
+    try events.append(allocator, .{ .kind = .mouse_scroll, .mouse_scroll = direction });
+    return i + 1;
+}
+
+fn decodeLegacyMouse(allocator: std.mem.Allocator, bytes: []const u8, events: *std.ArrayList(KeyEvent)) !?usize {
+    if (!std.mem.startsWith(u8, bytes, "\x1b[M")) return null;
+    if (bytes.len < 6) return null;
+    if (bytes[3] < 32) return null;
+    const button = @as(u16, bytes[3] - 32);
+    const direction = wheelDirection(button) orelse return 6;
+    try events.append(allocator, .{ .kind = .mouse_scroll, .mouse_scroll = direction });
+    return 6;
+}
+
+fn wheelDirection(button: u16) ?Direction {
+    if ((button & 64) == 0) return null;
+    return switch (button & 3) {
+        0 => .up,
+        1 => .down,
+        else => null,
+    };
 }
 
 fn utf8SequenceLength(byte: u8) ?usize {

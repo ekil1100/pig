@@ -72,6 +72,7 @@ pub const TerminalSession = struct {
 pub fn detectSizeForFd(fd: std.posix.fd_t) ?layout.Size {
     return switch (builtin.os.tag) {
         .linux => detectLinuxSizeForFd(fd),
+        .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .freebsd, .netbsd, .openbsd, .dragonfly => detectPosixSizeForFd(fd),
         else => null,
     };
 }
@@ -86,6 +87,19 @@ fn detectLinuxSizeForFd(fd: std.posix.fd_t) ?layout.Size {
     const linux = std.os.linux;
     const rc = linux.ioctl(fd, linux.T.IOCGWINSZ, @intFromPtr(&winsize));
     if (linux.errno(rc) != .SUCCESS) return null;
+    if (winsize.col == 0 or winsize.row == 0) return null;
+    return .{ .width = winsize.col, .height = winsize.row };
+}
+
+fn detectPosixSizeForFd(fd: std.posix.fd_t) ?layout.Size {
+    var winsize: std.posix.winsize = .{
+        .row = 0,
+        .col = 0,
+        .xpixel = 0,
+        .ypixel = 0,
+    };
+    const rc = std.c.ioctl(fd, @intCast(std.c.T.IOCGWINSZ), &winsize);
+    if (rc != 0) return null;
     if (winsize.col == 0 or winsize.row == 0) return null;
     return .{ .width = winsize.col, .height = winsize.row };
 }

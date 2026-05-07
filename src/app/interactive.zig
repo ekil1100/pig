@@ -178,6 +178,7 @@ pub const InteractiveApp = struct {
     scoped_models_status: std.ArrayList(u8) = .empty,
     transcript: std.ArrayList(TranscriptItem) = .empty,
     size: tui.layout.Size,
+    scroll_offset: usize = 0,
     worker: AgentWorker = .{},
 
     pub fn init(allocator: std.mem.Allocator, size: tui.layout.Size, agent_config: agent.AgentConfig) InteractiveApp {
@@ -201,7 +202,40 @@ pub const InteractiveApp = struct {
     }
 
     pub fn handleInput(self: *InteractiveApp, event: tui.input.KeyEvent) !tui.editor.SubmitResult {
+        switch (event.kind) {
+            .page_up => {
+                self.scrollByPage(.up);
+                return .none;
+            },
+            .page_down => {
+                self.scrollByPage(.down);
+                return .none;
+            },
+            .mouse_scroll => {
+                if (event.mouse_scroll) |direction| switch (direction) {
+                    .up => self.scrollByLines(.up, 3),
+                    .down => self.scrollByLines(.down, 3),
+                    else => {},
+                };
+                return .none;
+            },
+            else => {},
+        }
         return try self.editor.handle(event, self.worker.busy);
+    }
+
+    const ScrollDirection = enum { up, down };
+
+    fn scrollByPage(self: *InteractiveApp, direction: ScrollDirection) void {
+        const step: usize = @max(@as(usize, self.size.height) / 2, 1);
+        self.scrollByLines(direction, step);
+    }
+
+    fn scrollByLines(self: *InteractiveApp, direction: ScrollDirection, step: usize) void {
+        switch (direction) {
+            .up => self.scroll_offset +|= step,
+            .down => self.scroll_offset -|= step,
+        }
     }
 
     fn appendItem(self: *InteractiveApp, kind: InteractiveEventKind, text: []const u8, streaming: bool) !void {
@@ -209,6 +243,11 @@ pub const InteractiveApp = struct {
         errdefer item.deinit(self.allocator);
         try item.text.appendSlice(self.allocator, text);
         try self.transcript.append(self.allocator, item);
+        if (kind == .user) {
+            self.scroll_offset = 0;
+        } else if (kind == .status and std.mem.indexOfScalar(u8, text, '\n') != null) {
+            self.scroll_offset = std.math.maxInt(usize);
+        }
     }
 
     fn appendToLastAssistant(self: *InteractiveApp, text: []const u8) !void {
@@ -240,6 +279,11 @@ pub const InteractiveApp = struct {
     pub fn renderFrame(self: *InteractiveApp) !tui.render.Frame {
         var frame = tui.render.Frame.init(self.allocator, self.size);
         errdefer frame.deinit();
+        var transcript_lines: std.ArrayList([]const u8) = .empty;
+        defer freeOwnedLines(self.allocator, &transcript_lines);
+        var input_lines: std.ArrayList([]const u8) = .empty;
+        defer freeOwnedLines(self.allocator, &input_lines);
+
         for (self.transcript.items) |item| {
             const prefix = switch (item.kind) {
                 .user => "you: ",
@@ -250,18 +294,56 @@ pub const InteractiveApp = struct {
             };
             const line = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ prefix, item.text.items });
             defer self.allocator.free(line);
-            try frame.appendLine(line);
+            try appendWrappedLines(self.allocator, &transcript_lines, line, self.size.width);
         }
         if (self.worker.busy) {
-            try frame.appendLine("... running (Ctrl+C to abort)");
+            try appendWrappedLines(self.allocator, &transcript_lines, "... running (Ctrl+C to abort)", self.size.width);
         }
         const input_line = try std.fmt.allocPrint(self.allocator, "> {s}", .{self.editor.text()});
         defer self.allocator.free(input_line);
-        try frame.appendLine(input_line);
-        frame.cursor = .{ .row = @intCast(@min(frame.lines.items.len, @as(usize, self.size.height)) -| 1), .col = @intCast(@min(tui.layout.displayWidth(input_line), @as(usize, self.size.width) -| 1)) };
+        try appendWrappedLines(self.allocator, &input_lines, input_line, self.size.width);
+
+        const height: usize = @max(@as(usize, self.size.height), 1);
+        const input_height = @min(input_lines.items.len, height);
+        const transcript_height = height - input_height;
+        const max_scroll = transcript_lines.items.len -| transcript_height;
+        self.scroll_offset = @min(self.scroll_offset, max_scroll);
+
+        const transcript_start = if (transcript_lines.items.len <= transcript_height)
+            0
+        else
+            max_scroll - self.scroll_offset;
+        const transcript_end = @min(transcript_start + transcript_height, transcript_lines.items.len);
+        for (transcript_lines.items[transcript_start..transcript_end]) |line| {
+            try frame.appendLine(line);
+        }
+
+        const input_start = input_lines.items.len - input_height;
+        for (input_lines.items[input_start..]) |line| {
+            try frame.appendLine(line);
+        }
+
+        const cursor_line = if (input_height == 0) "" else input_lines.items[input_lines.items.len - 1];
+        frame.cursor = .{
+            .row = @intCast(@min(frame.lines.items.len, height) -| 1),
+            .col = @intCast(@min(tui.layout.displayWidth(cursor_line), @as(usize, self.size.width) -| 1)),
+        };
         return frame;
     }
 };
+
+fn appendWrappedLines(allocator: std.mem.Allocator, lines: *std.ArrayList([]const u8), text: []const u8, width: u16) !void {
+    const wrapped = try tui.layout.wrapText(allocator, text, width);
+    defer tui.layout.freeLines(allocator, wrapped);
+    for (wrapped) |line| {
+        try lines.append(allocator, try allocator.dupe(u8, line));
+    }
+}
+
+fn freeOwnedLines(allocator: std.mem.Allocator, lines: *std.ArrayList([]const u8)) void {
+    for (lines.items) |line| allocator.free(line);
+    lines.deinit(allocator);
+}
 
 pub fn runScript(config: args.RunConfig, context: Context, input_bytes: []const u8, output: *std.Io.Writer) !InteractiveStatus {
     var app = InteractiveApp.init(context.allocator, context.size, .{
@@ -315,13 +397,13 @@ pub fn runLive(config: args.RunConfig, context: Context, io: std.Io, output: *st
     defer session.restoreForFd(std.posix.STDIN_FILENO);
 
     if (interactive_tty) {
-        try output.writeAll("\x1b[?1049h\x1b[?25l");
+        try output.writeAll("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h");
         session.alternate_entered = true;
         session.cursor_hidden = true;
         try output.flush();
     }
     defer if (interactive_tty) {
-        output.writeAll("\x1b[?25h\x1b[?1049l") catch {};
+        output.writeAll("\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l") catch {};
         output.flush() catch {};
     };
 
