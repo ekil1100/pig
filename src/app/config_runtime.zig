@@ -77,14 +77,15 @@ pub fn resolve(options: ResolveOptions) ConfigRuntimeError!ResolvedRuntimeConfig
     var model = resources.models.selectModel(allocator, &snapshot.models, .{
         .provider_override = options.config.provider,
         .model_override = options.config.model,
+        .settings_provider = snapshot.settings.provider,
         .settings_model = snapshot.settings.model,
     }) catch |err| return mapModelError(err);
     errdefer model.deinit(allocator);
 
     const thinking_level = parseThinking(snapshot.settings.thinking) orelse return error.InvalidThinkingLevel;
     var effective = options.config;
-    effective.provider = model.provider_id;
-    effective.model = model.model;
+    effective.provider = options.config.provider orelse snapshot.settings.provider;
+    effective.model = options.config.model orelse snapshot.settings.model;
     effective.thinking_level = thinking_level;
     effective.tools_enabled = snapshot.settings.tools_enabled;
     effective.include_p1_tools = snapshot.settings.include_p1_tools;

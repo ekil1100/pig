@@ -17,8 +17,8 @@ test "settings merge global project and cli overrides" {
     var loaded = try pig.resources.settings.load(std.testing.allocator, std.testing.io, global, project, .{ .model = "cli" });
     defer loaded.deinit(std.testing.allocator);
 
-    try std.testing.expectEqualStrings("openai_compatible", loaded.settings.provider);
-    try std.testing.expectEqualStrings("cli", loaded.settings.model);
+    try std.testing.expectEqualStrings("openai_compatible", loaded.settings.provider.?);
+    try std.testing.expectEqualStrings("cli", loaded.settings.model.?);
     try std.testing.expect(!loaded.settings.tools_enabled);
     try std.testing.expect(loaded.settings.include_p1_tools);
     try std.testing.expectEqual(@as(usize, 12), loaded.settings.context_max_bytes);
@@ -26,9 +26,10 @@ test "settings merge global project and cli overrides" {
     try std.testing.expectEqualStrings("AGENTS.md", loaded.settings.context_include[0]);
 }
 
-test "settings missing files are warnings and pi namespace does not appear" {
+test "settings missing files are warnings and model/provider stay unset" {
     var loaded = try pig.resources.settings.load(std.testing.allocator, std.testing.io, "missing-global.json", "missing-project.json", .{});
     defer loaded.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 2), loaded.warnings.items.len);
-    try std.testing.expect(std.mem.indexOf(u8, loaded.settings.model, ".pi") == null);
+    try std.testing.expectEqual(@as(?[]const u8, null), loaded.settings.provider);
+    try std.testing.expectEqual(@as(?[]const u8, null), loaded.settings.model);
 }

@@ -13,8 +13,8 @@ pub const ContextSettings = struct {
 };
 
 pub const ResolvedSettings = struct {
-    provider: []const u8,
-    model: []const u8,
+    provider: ?[]const u8,
+    model: ?[]const u8,
     thinking: []const u8,
     tools_enabled: bool,
     include_p1_tools: bool,
@@ -33,15 +33,11 @@ pub const ResolvedSettings = struct {
             include[i] = try allocator.dupe(u8, name);
             include_count += 1;
         }
-        const provider = try allocator.dupe(u8, "openai_compatible");
-        errdefer allocator.free(provider);
-        const model = try allocator.dupe(u8, "gpt-4.1-mini");
-        errdefer allocator.free(model);
         const thinking = try allocator.dupe(u8, "off");
         errdefer allocator.free(thinking);
         return .{
-            .provider = provider,
-            .model = model,
+            .provider = null,
+            .model = null,
             .thinking = thinking,
             .tools_enabled = true,
             .include_p1_tools = false,
@@ -51,12 +47,18 @@ pub const ResolvedSettings = struct {
     }
 
     pub fn deinit(self: *ResolvedSettings, allocator: std.mem.Allocator) void {
-        allocator.free(self.provider);
-        allocator.free(self.model);
+        if (self.provider) |provider| allocator.free(provider);
+        if (self.model) |model| allocator.free(model);
         allocator.free(self.thinking);
         for (self.context_include) |item| allocator.free(item);
         allocator.free(self.context_include);
         self.* = undefined;
+    }
+
+    fn replaceOptionalString(allocator: std.mem.Allocator, slot: *?[]const u8, value: []const u8) !void {
+        const owned = try allocator.dupe(u8, value);
+        if (slot.*) |old| allocator.free(old);
+        slot.* = owned;
     }
 
     fn replaceString(allocator: std.mem.Allocator, slot: *[]const u8, value: []const u8) !void {
@@ -133,8 +135,8 @@ fn applyFile(allocator: std.mem.Allocator, io: std.Io, result: *LoadResult, path
 }
 
 fn applyObject(allocator: std.mem.Allocator, settings: *ResolvedSettings, warnings: *std.ArrayList(common.ResourceWarning), path: []const u8, object: std.json.ObjectMap) !void {
-    if (json.optionalStringField(object, "provider")) |provider| try ResolvedSettings.replaceString(allocator, &settings.provider, provider);
-    if (json.optionalStringField(object, "model")) |model| try ResolvedSettings.replaceString(allocator, &settings.model, model);
+    if (json.optionalStringField(object, "provider")) |provider| try ResolvedSettings.replaceOptionalString(allocator, &settings.provider, provider);
+    if (json.optionalStringField(object, "model")) |model| try ResolvedSettings.replaceOptionalString(allocator, &settings.model, model);
     if (json.optionalStringField(object, "thinking")) |thinking| try ResolvedSettings.replaceString(allocator, &settings.thinking, thinking);
     if (object.get("api_key") != null) try common.appendWarning(allocator, warnings, .secret_in_config, path, "settings must not contain API keys");
     if (object.get("tools")) |tools_value| {
@@ -173,8 +175,8 @@ fn intFromValue(value: std.json.Value) ?usize {
 }
 
 pub fn applyOverrides(allocator: std.mem.Allocator, settings: *ResolvedSettings, overrides: CliOverrides) !void {
-    if (overrides.provider) |provider| try ResolvedSettings.replaceString(allocator, &settings.provider, provider);
-    if (overrides.model) |model| try ResolvedSettings.replaceString(allocator, &settings.model, model);
+    if (overrides.provider) |provider| try ResolvedSettings.replaceOptionalString(allocator, &settings.provider, provider);
+    if (overrides.model) |model| try ResolvedSettings.replaceOptionalString(allocator, &settings.model, model);
     if (overrides.thinking) |thinking| try ResolvedSettings.replaceString(allocator, &settings.thinking, thinking);
     if (overrides.tools_enabled) |enabled| settings.tools_enabled = enabled;
     if (overrides.include_p1_tools) |include| settings.include_p1_tools = include;

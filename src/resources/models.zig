@@ -211,38 +211,50 @@ fn upsert(allocator: std.mem.Allocator, registry: *Registry, entry: ModelEntry) 
 pub const SelectOptions = struct {
     provider_override: ?[]const u8 = null,
     model_override: ?[]const u8 = null,
-    settings_model: []const u8,
+    settings_provider: ?[]const u8 = null,
+    settings_model: ?[]const u8 = null,
 };
 
 pub fn selectModel(allocator: std.mem.Allocator, registry: *const Registry, options: SelectOptions) !ModelEntry {
-    if (options.provider_override) |provider_id| {
-        if (options.model_override == null) {
+    if (options.provider_override orelse options.settings_provider) |provider_id| {
+        const model_override = options.model_override orelse if (options.provider_override == null) options.settings_model else null;
+        if (model_override == null) {
             if (registry.findDefaultForProvider(provider_id)) |entry| return try ModelEntry.clone(allocator, entry.*);
         }
-        const model_name = options.model_override orelse options.settings_model;
-        var source = try common.ResourceSourceInfo.clone(allocator, .project, "cli", 255);
-        errdefer source.deinit(allocator);
-        const id = try allocator.dupe(u8, model_name);
-        errdefer allocator.free(id);
-        const owned_provider_id = try allocator.dupe(u8, provider_id);
-        errdefer allocator.free(owned_provider_id);
-        const display_name = try allocator.dupe(u8, model_name);
-        errdefer allocator.free(display_name);
-        const model = try allocator.dupe(u8, model_name);
-        errdefer allocator.free(model);
-        return .{
-            .id = id,
-            .provider_id = owned_provider_id,
-            .display_name = display_name,
-            .model = model,
-            .base_url = null,
-            .enabled = true,
-            .scope = .transient,
-            .source = source,
-        };
+        const model_name = model_override orelse return error.UnknownModel;
+        if (registry.find(model_name)) |entry| {
+            if (std.mem.eql(u8, entry.provider_id, provider_id)) {
+                if (!entry.enabled) return error.DisabledModel;
+                return try ModelEntry.clone(allocator, entry.*);
+            }
+        }
+        return try transientModel(allocator, provider_id, model_name);
     }
-    const wanted = options.model_override orelse registry.default_model orelse options.settings_model;
+    const wanted = options.model_override orelse options.settings_model orelse registry.default_model orelse return error.UnknownModel;
     const entry = registry.find(wanted) orelse return error.UnknownModel;
     if (!entry.enabled) return error.DisabledModel;
     return try ModelEntry.clone(allocator, entry.*);
+}
+
+fn transientModel(allocator: std.mem.Allocator, provider_id: []const u8, model_name: []const u8) !ModelEntry {
+    var source = try common.ResourceSourceInfo.clone(allocator, .project, "config", 255);
+    errdefer source.deinit(allocator);
+    const id = try allocator.dupe(u8, model_name);
+    errdefer allocator.free(id);
+    const owned_provider_id = try allocator.dupe(u8, provider_id);
+    errdefer allocator.free(owned_provider_id);
+    const display_name = try allocator.dupe(u8, model_name);
+    errdefer allocator.free(display_name);
+    const model = try allocator.dupe(u8, model_name);
+    errdefer allocator.free(model);
+    return .{
+        .id = id,
+        .provider_id = owned_provider_id,
+        .display_name = display_name,
+        .model = model,
+        .base_url = null,
+        .enabled = true,
+        .scope = .transient,
+        .source = source,
+    };
 }

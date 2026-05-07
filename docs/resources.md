@@ -39,11 +39,13 @@ defaults -> global settings.json -> project settings.json -> CLI flags
 
 Objects merge by field. Arrays replace the previous value. Missing files produce warnings, not failures. Invalid selected values, invalid settings JSON, and invalid models JSON are failures.
 
+Provider and model are unset by default in settings. Runtime model selection may still fall back to the registry default so the app can start, but that fallback is not written back into the effective run config as an explicit user setting.
+
 ## Models
 
 The model registry starts with built-ins, then applies global and project `models.json`. Project entries override global entries with the same id and produce collision warnings.
 
-`settings.model` is a registry id. A model entry's `model` field is the provider-facing model name. `resources.models` keeps `provider_id` as a string; `app.model_factory` maps it to `provider.ProviderKind`.
+`settings.model` is a registry id. When `settings.provider` is also set, a matching enabled registry entry for that provider is still preferred; otherwise the pair is treated as a transient provider/model selection. A model entry's `model` field is the provider-facing model name. `resources.models` keeps `provider_id` as a string; `app.model_factory` maps it to `provider.ProviderKind`.
 
 Built-in model entries include `gpt-4.1-mini`, `deepseek-v4-flash`, and `deepseek-v4-pro`. DeepSeek entries use `provider_id: "deepseek"` and the OpenAI-compatible base URL `https://api.deepseek.com`.
 
