@@ -291,18 +291,8 @@ pub const InteractiveApp = struct {
         var input_lines: std.ArrayList([]const u8) = .empty;
         defer freeOwnedLines(self.allocator, &input_lines);
 
-        for (self.transcript.items) |item| {
-            const prefix = switch (item.kind) {
-                .user => "you: ",
-                .assistant => "pig: ",
-                .thinking => "thinking: ",
-                .tool => "tool: ",
-                .error_item => "error: ",
-                .status => "status: ",
-            };
-            const line = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ prefix, item.text.items });
-            defer self.allocator.free(line);
-            try appendWrappedLines(self.allocator, &transcript_lines, line, self.size.width);
+        for (self.transcript.items) |*item| {
+            try appendTranscriptItemLines(self.allocator, &transcript_lines, item, self.size.width);
         }
         if (self.worker.busy) {
             try appendWrappedLines(self.allocator, &transcript_lines, "... running (Ctrl+C to abort)", self.size.width);
@@ -352,6 +342,90 @@ fn freeOwnedLines(allocator: std.mem.Allocator, lines: *std.ArrayList([]const u8
     for (lines.items) |line| allocator.free(line);
     lines.deinit(allocator);
 }
+
+fn appendTranscriptItemLines(allocator: std.mem.Allocator, lines: *std.ArrayList([]const u8), item: *const TranscriptItem, width: u16) !void {
+    const prefix = switch (item.kind) {
+        .user => "you: ",
+        .assistant => "pig: ",
+        .thinking => "thinking: ",
+        .tool => "tool: ",
+        .error_item => "error: ",
+        .status => "status: ",
+    };
+    const line = try std.fmt.allocPrint(allocator, "{s}{s}", .{ prefix, item.text.items });
+    defer allocator.free(line);
+    try appendWrappedLines(allocator, lines, line, width);
+}
+
+fn appendInputLines(allocator: std.mem.Allocator, lines: *std.ArrayList([]const u8), app: *const InteractiveApp) !void {
+    const input_line = try std.fmt.allocPrint(allocator, "> {s}", .{app.editor.text()});
+    defer allocator.free(input_line);
+    try appendWrappedLines(allocator, lines, input_line, app.size.width);
+}
+
+fn trailingLiveTranscriptStart(app: *const InteractiveApp) usize {
+    var index = app.transcript.items.len;
+    while (index > 0 and app.transcript.items[index - 1].is_streaming) {
+        index -= 1;
+    }
+    return index;
+}
+
+const LiveRenderer = struct {
+    allocator: std.mem.Allocator,
+    flushed_items: usize = 0,
+    live_height: usize = 0,
+
+    fn init(allocator: std.mem.Allocator) LiveRenderer {
+        return .{ .allocator = allocator };
+    }
+
+    fn render(self: *LiveRenderer, app: *const InteractiveApp, output: *std.Io.Writer) !void {
+        try self.clearLive(output);
+
+        const stable_end = trailingLiveTranscriptStart(app);
+        var stable_lines: std.ArrayList([]const u8) = .empty;
+        defer freeOwnedLines(self.allocator, &stable_lines);
+        for (app.transcript.items[self.flushed_items..stable_end]) |*item| {
+            try appendTranscriptItemLines(self.allocator, &stable_lines, item, app.size.width);
+        }
+        for (stable_lines.items) |line| {
+            try output.print("{s}\r\n", .{line});
+        }
+        self.flushed_items = stable_end;
+
+        var live_lines: std.ArrayList([]const u8) = .empty;
+        defer freeOwnedLines(self.allocator, &live_lines);
+        for (app.transcript.items[stable_end..]) |*item| {
+            try appendTranscriptItemLines(self.allocator, &live_lines, item, app.size.width);
+        }
+        if (app.worker.busy) {
+            try appendWrappedLines(self.allocator, &live_lines, "... running (Ctrl+C to abort)", app.size.width);
+        }
+        try appendInputLines(self.allocator, &live_lines, app);
+
+        for (live_lines.items, 0..) |line, index| {
+            if (index > 0) try output.writeAll("\r\n");
+            try output.writeAll(line);
+        }
+        self.live_height = live_lines.items.len;
+    }
+
+    fn finish(self: *LiveRenderer, output: *std.Io.Writer) void {
+        self.clearLive(output) catch {};
+        output.writeAll("\r\n") catch {};
+    }
+
+    fn clearLive(self: *LiveRenderer, output: *std.Io.Writer) !void {
+        if (self.live_height == 0) return;
+        try output.writeAll("\r\x1b[2K");
+        var row: usize = 1;
+        while (row < self.live_height) : (row += 1) {
+            try output.writeAll("\x1b[1A\r\x1b[2K");
+        }
+        self.live_height = 0;
+    }
+};
 
 pub fn runScript(config: args.RunConfig, context: Context, input_bytes: []const u8, output: *std.Io.Writer) !InteractiveStatus {
     var app = InteractiveApp.init(context.allocator, context.size, .{
@@ -405,17 +479,19 @@ pub fn runLive(config: args.RunConfig, context: Context, io: std.Io, output: *st
     defer session.restoreForFd(std.posix.STDIN_FILENO);
 
     if (interactive_tty) {
-        try output.writeAll("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h");
-        session.alternate_entered = true;
+        try output.writeAll(tui.terminal.interactive_enter_sequence);
         session.cursor_hidden = true;
         try output.flush();
     }
     defer if (interactive_tty) {
-        output.writeAll("\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l") catch {};
+        output.writeAll(tui.terminal.interactive_exit_sequence) catch {};
         output.flush() catch {};
     };
 
-    try renderApp(&app, output);
+    var live_renderer = LiveRenderer.init(context.allocator);
+    defer live_renderer.finish(output);
+
+    try live_renderer.render(&app, output);
     try output.flush();
 
     var active_turn: ?*ActiveTurn = null;
@@ -428,12 +504,12 @@ pub fn runLive(config: args.RunConfig, context: Context, io: std.Io, output: *st
                 if (size.width != app.size.width or size.height != app.size.height) {
                     app.size = size;
                     session.size = size;
-                    try renderApp(&app, output);
+                    try live_renderer.render(&app, output);
                     try output.flush();
                 }
             }
         }
-        try pumpActiveTurn(&active_turn, &app, output);
+        try pumpActiveTurn(&active_turn, &app, &live_renderer, output);
         const poll_timeout: i32 = if (active_turn == null) if (interactive_tty) 250 else -1 else 25;
         var poll_fds = [_]std.posix.pollfd{.{
             .fd = std.posix.STDIN_FILENO,
@@ -464,7 +540,7 @@ pub fn runLive(config: args.RunConfig, context: Context, io: std.Io, output: *st
         const events = try tui.input.decodeAll(context.allocator, bytes);
         defer context.allocator.free(events);
         for (events) |event| {
-            const status = try handleLiveInputEvent(config, context, &app, &active_turn, event, output);
+            const status = try handleLiveInputEvent(config, context, &app, &active_turn, &live_renderer, event, output);
             try output.flush();
             switch (status) {
                 .continue_loop => {},
@@ -478,15 +554,15 @@ pub fn runLive(config: args.RunConfig, context: Context, io: std.Io, output: *st
 
 const InputStatus = enum { continue_loop, exit_ok, failure, internal };
 
-fn handleLiveInputEvent(config: args.RunConfig, context: Context, app: *InteractiveApp, active_turn: *?*ActiveTurn, event: tui.input.KeyEvent, output: *std.Io.Writer) !InputStatus {
+fn handleLiveInputEvent(config: args.RunConfig, context: Context, app: *InteractiveApp, active_turn: *?*ActiveTurn, renderer: *LiveRenderer, event: tui.input.KeyEvent, output: *std.Io.Writer) !InputStatus {
     const result = try app.handleInput(event);
     switch (result) {
-        .none => try renderApp(app, output),
+        .none => try renderer.render(app, output),
         .exit => {
             if (active_turn.*) |turn| {
                 turn.requestAbort();
                 try app.appendItem(.status, "abort requested", false);
-                try renderApp(app, output);
+                try renderer.render(app, output);
                 return .continue_loop;
             }
             return .exit_ok;
@@ -495,28 +571,28 @@ fn handleLiveInputEvent(config: args.RunConfig, context: Context, app: *Interact
             if (active_turn.*) |turn| turn.requestAbort();
             app.worker.requestAbort();
             try app.appendItem(.status, "abort requested", false);
-            try renderApp(app, output);
+            try renderer.render(app, output);
         },
         .submit => |prompt| {
             var prompt_owned = true;
             defer if (prompt_owned) app.editor.freeSubmitted(prompt);
             if (commands.isCommandInput(prompt)) {
                 const command_status = try handleCommand(context, app, prompt, active_turn);
-                try renderApp(app, output);
+                try renderer.render(app, output);
                 return command_status;
             }
             if (active_turn.* != null) {
                 try app.appendItem(.status, "turn already running", false);
-                try renderApp(app, output);
+                try renderer.render(app, output);
                 return .continue_loop;
             }
             var model_prompt = try prepareSubmittedPrompt(context.allocator, prompt);
             defer model_prompt.deinit(context.allocator);
             try app.appendItem(.user, model_prompt.text, false);
-            try renderApp(app, output);
+            try renderer.render(app, output);
             const model = app.model_client orelse {
                 try app.appendItem(.error_item, "model client unavailable", false);
-                try renderApp(app, output);
+                try renderer.render(app, output);
                 return if (context.recover_missing_model) .continue_loop else .failure;
             };
             active_turn.* = try ActiveTurn.start(config, context, app, model, model_prompt.text);
@@ -651,7 +727,7 @@ const ActiveTurn = struct {
     }
 };
 
-fn pumpActiveTurn(active_turn: *?*ActiveTurn, app: *InteractiveApp, output: *std.Io.Writer) !void {
+fn pumpActiveTurn(active_turn: *?*ActiveTurn, app: *InteractiveApp, renderer: *LiveRenderer, output: *std.Io.Writer) !void {
     const turn = active_turn.* orelse return;
     var changed = try drainQueuedEvents(turn, app);
     if (turn.done.load(.acquire)) {
@@ -661,7 +737,7 @@ fn pumpActiveTurn(active_turn: *?*ActiveTurn, app: *InteractiveApp, output: *std
         changed = true;
     }
     if (changed) {
-        try renderApp(app, output);
+        try renderer.render(app, output);
         try output.flush();
     }
 }

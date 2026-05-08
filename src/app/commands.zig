@@ -157,7 +157,7 @@ pub fn formatHotkeys(allocator: std.mem.Allocator) ![]const u8 {
         if (spec.hidden) continue;
         try out.writer.print("/{s} - {s}\n", .{ spec.name, spec.summary });
     }
-    try out.writer.writeAll("shortcuts:\nCtrl+C - abort active turn or exit when idle\nCtrl+D - exit on empty input\nPageUp/PageDown or mouse wheel - scroll transcript\n");
+    try out.writer.writeAll("shortcuts:\nCtrl+C - abort active turn or exit when idle\nCtrl+D - exit on empty input\nMouse wheel - scroll terminal history\nMouse drag - select terminal text for copy\n");
     return try out.toOwnedSlice();
 }
 

@@ -41,4 +41,6 @@ test "command registry resolves aliases and formats hotkeys" {
     try std.testing.expect(std.mem.indexOf(u8, hotkeys, "/reload - reload settings") != null);
     try std.testing.expect(std.mem.indexOf(u8, hotkeys, "/scoped-models") != null);
     try std.testing.expect(std.mem.indexOf(u8, hotkeys, "Ctrl+C") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hotkeys, "Mouse wheel - scroll terminal history") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hotkeys, "Mouse drag - select terminal text for copy") != null);
 }

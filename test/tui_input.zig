@@ -1,6 +1,7 @@
 const std = @import("std");
 const pig = @import("pig");
 const input = pig.tui.input;
+const terminal = pig.tui.terminal;
 
 test "input decoder recognizes text arrows ctrl and paste markers" {
     const events = try input.decodeAll(std.testing.allocator, "h中\x1b[D\x03\x1b[200~x\x1b[201~");
@@ -54,4 +55,15 @@ test "input decoder ignores horizontal mouse wheel scroll" {
     defer std.testing.allocator.free(events);
 
     try std.testing.expectEqual(@as(usize, 0), events.len);
+}
+
+test "interactive terminal sequences keep native mouse selection available" {
+    try std.testing.expect(std.mem.indexOf(u8, terminal.interactive_enter_sequence, "\x1b[?1049h") == null);
+    try std.testing.expect(std.mem.indexOf(u8, terminal.interactive_exit_sequence, "\x1b[?1049l") == null);
+    try std.testing.expect(std.mem.indexOf(u8, terminal.interactive_enter_sequence, "\x1b[?1000h") == null);
+    try std.testing.expect(std.mem.indexOf(u8, terminal.interactive_enter_sequence, "\x1b[?1006h") == null);
+    try std.testing.expect(std.mem.indexOf(u8, terminal.interactive_exit_sequence, "\x1b[?1000l") == null);
+    try std.testing.expect(std.mem.indexOf(u8, terminal.interactive_exit_sequence, "\x1b[?1006l") == null);
+    try std.testing.expect(std.mem.indexOf(u8, terminal.interactive_enter_sequence, "\x1b[?1007h") == null);
+    try std.testing.expect(std.mem.indexOf(u8, terminal.interactive_exit_sequence, "\x1b[?1007l") == null);
 }

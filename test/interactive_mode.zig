@@ -226,7 +226,7 @@ test "interactive mode allows builtin bash execution" {
     try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "bash complete") != null);
 }
 
-test "interactive mode scrolls transcript with page keys" {
+test "scripted interactive renderer scrolls transcript with page keys" {
     const turn = [_]provider.ProviderEvent{
         .{ .message_start = .{ .role = .assistant } },
         .{ .text_delta = .{ .text = "line1\nline2\nline3\nline4\nline5" } },
@@ -253,7 +253,7 @@ test "interactive mode scrolls transcript with page keys" {
     try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "pig: line1") != null);
 }
 
-test "interactive mode scrolls transcript with mouse wheel" {
+test "scripted interactive renderer scrolls transcript with decoded mouse wheel events" {
     const turn = [_]provider.ProviderEvent{
         .{ .message_start = .{ .role = .assistant } },
         .{ .text_delta = .{ .text = "line1\nline2\nline3\nline4\nline5" } },
