@@ -1,7 +1,15 @@
 const model_client = @import("model_client.zig");
+const state = @import("state.zig");
 const tool = @import("tool.zig");
 
 pub const MiddlewareError = error{ OutOfMemory, MiddlewareRejected };
+
+pub const ShouldStopAfterTurnContext = struct {
+    state: *const state.AgentState,
+    assistant_index: usize,
+    tool_result_start_index: usize,
+    tool_result_count: usize,
+};
 
 pub const MiddlewareHooks = struct {
     ptr: ?*anyopaque = null,
@@ -9,6 +17,7 @@ pub const MiddlewareHooks = struct {
     before_provider_request: ?*const fn (ptr: ?*anyopaque, request: model_client.ModelRequest) MiddlewareError!void = null,
     before_tool_call: ?*const fn (ptr: ?*anyopaque, call: tool.ToolCall) MiddlewareError!void = null,
     after_tool_result: ?*const fn (ptr: ?*anyopaque, result: tool.ToolExecutionResult) MiddlewareError!void = null,
+    should_stop_after_turn: ?*const fn (ptr: ?*anyopaque, context: ShouldStopAfterTurnContext) bool = null,
     before_compaction: ?*const fn (ptr: ?*anyopaque) MiddlewareError!void = null,
     before_tree_navigation: ?*const fn (ptr: ?*anyopaque) MiddlewareError!void = null,
 
@@ -26,5 +35,10 @@ pub const MiddlewareHooks = struct {
 
     pub fn callAfterToolResult(self: MiddlewareHooks, result: tool.ToolExecutionResult) MiddlewareError!void {
         if (self.after_tool_result) |f| try f(self.ptr, result);
+    }
+
+    pub fn callShouldStopAfterTurn(self: MiddlewareHooks, context: ShouldStopAfterTurnContext) bool {
+        if (self.should_stop_after_turn) |f| return f(self.ptr, context);
+        return false;
     }
 };

@@ -102,7 +102,6 @@ fn runWithSink(config: args.RunConfig, context: RuntimeContext, model: agent.Mod
     var state = agent.AgentState.init(context.allocator, .{
         .system_prompt = system_prompt,
         .thinking_level = config.thinking_level,
-        .max_iterations = config.max_iterations,
     });
     defer state.deinit();
 

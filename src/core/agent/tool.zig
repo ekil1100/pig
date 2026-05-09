@@ -20,6 +20,7 @@ pub const ToolExecutionResult = struct {
     tool_call_id: []const u8,
     content_json: []const u8,
     is_error: bool = false,
+    terminate: bool = false,
 
     pub fn deinit(self: ToolExecutionResult, allocator: std.mem.Allocator) void {
         allocator.free(self.tool_call_id);

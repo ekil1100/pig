@@ -33,7 +33,7 @@ Pig v1.0 is local-first CLI software. Allocation ownership is explicit so provid
 - `StreamAccumulator` owns in-progress text, thinking text/signature bytes, and pending tool-call strings.
 - `MessageViewBatch` owns only temporary message/content view slices for one provider request; payload strings remain owned by `AgentState`.
 - `AgentEvent` payloads are callback-scoped. Retaining sinks must clone payloads.
-- `ToolExecutionResult` owns `tool_call_id` and `content_json`; runtime clones them into `AgentState` before deinitializing the result.
+- `ToolExecutionResult` owns `tool_call_id` and `content_json`; runtime clones them into `AgentState` before deinitializing the result. Its `terminate` flag is plain control metadata and has no owned memory.
 - Middleware hooks receive borrowed callback-scoped payloads and must clone anything they retain.
 
 ## M3 Coding Tools Policy

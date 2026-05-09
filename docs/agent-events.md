@@ -47,7 +47,7 @@ turn_end(completed)
 agent_end(completed)
 ```
 
-One tool-call turn:
+One tool-call continuation:
 
 ```text
 agent_start
@@ -57,6 +57,8 @@ message_delta*
 message_end
 tool_execution_start
 tool_execution_end
+turn_end(completed)
+turn_start
 message_start
 message_delta*
 message_end

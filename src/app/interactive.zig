@@ -431,7 +431,6 @@ pub fn runScript(config: args.RunConfig, context: Context, input_bytes: []const 
     var app = InteractiveApp.init(context.allocator, context.size, .{
         .system_prompt = context.system_prompt,
         .thinking_level = config.thinking_level,
-        .max_iterations = config.max_iterations,
     });
     defer app.deinit();
     app.model_client = context.model_client;
@@ -459,7 +458,6 @@ pub fn runLive(config: args.RunConfig, context: Context, io: std.Io, output: *st
     var app = InteractiveApp.init(context.allocator, context.size, .{
         .system_prompt = context.system_prompt,
         .thinking_level = config.thinking_level,
-        .max_iterations = config.max_iterations,
     });
     defer app.deinit();
     app.model_client = context.model_client;

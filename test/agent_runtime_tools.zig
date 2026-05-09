@@ -35,11 +35,54 @@ test "runtime executes one tool call and continues" {
     try std.testing.expectEqual(@as(usize, 4), state.messages.items.len);
     try std.testing.expectEqual(provider.Role.tool, state.messages.items[2].role);
     try std.testing.expectEqualStrings("pong", state.messages.items[3].content[0].text.text);
+    var turn_starts: usize = 0;
+    var turn_ends: usize = 0;
+    for (collector.events.items) |event| {
+        if (event.tag == .turn_start) turn_starts += 1;
+        if (event.tag == .turn_end) turn_ends += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), turn_starts);
+    try std.testing.expectEqual(@as(usize, 2), turn_ends);
 }
 
 const RejectResult = struct {
     fn afterToolResult(_: ?*anyopaque, _: agent.tool.ToolExecutionResult) agent.middleware.MiddlewareError!void {
         return error.MiddlewareRejected;
+    }
+};
+
+const StopAfterTurn = struct {
+    calls: usize = 0,
+    tool_result_count: usize = 0,
+    message_count: usize = 0,
+    assistant_index: usize = 0,
+    tool_result_start_index: usize = 0,
+
+    fn hook(ptr: ?*anyopaque, context: agent.middleware.ShouldStopAfterTurnContext) bool {
+        const self: *StopAfterTurn = @ptrCast(@alignCast(ptr.?));
+        self.calls += 1;
+        self.tool_result_count = context.tool_result_count;
+        self.message_count = context.state.messages.items.len;
+        self.assistant_index = context.assistant_index;
+        self.tool_result_start_index = context.tool_result_start_index;
+        return true;
+    }
+};
+
+const TerminatingTool = struct {
+    calls: usize = 0,
+
+    fn registration(self: *TerminatingTool) agent.tool.ToolRegistration {
+        return .{ .spec = .{ .name = "terminate", .description = "return a terminating result" }, .executor = .{ .ptr = self, .execute_fn = execute } };
+    }
+
+    fn execute(ptr: *anyopaque, context: agent.tool.ToolExecutionContext, call: agent.tool.ToolCall) agent.tool.ToolExecutorError!agent.tool.ToolExecutionResult {
+        const self: *TerminatingTool = @ptrCast(@alignCast(ptr));
+        self.calls += 1;
+        const id = try context.allocator.dupe(u8, call.id);
+        errdefer context.allocator.free(id);
+        const content = try context.allocator.dupe(u8, "{\"ok\":true}");
+        return .{ .tool_call_id = id, .content_json = content, .terminate = true };
     }
 };
 
@@ -134,20 +177,48 @@ test "missing tool fails with lifecycle closure" {
     try std.testing.expectEqual(agent.state.AgentStatus.failed, collector.events.items[collector.events.items.len - 1].status.?);
 }
 
-test "max iterations protects tool loops" {
-    const turn = [_]provider.ProviderEvent{ .{ .message_start = .{ .role = .assistant } }, .{ .tool_call_end = .{ .index = 0, .id = "call_1", .name = "echo", .arguments_json = "{}" } }, .message_end, .done };
+test "terminating tool result stops before follow-up provider request" {
+    const turn = [_]provider.ProviderEvent{ .{ .message_start = .{ .role = .assistant } }, .{ .tool_call_end = .{ .index = 0, .id = "call_1", .name = "terminate", .arguments_json = "{}" } }, .message_end, .done };
     const turns = [_][]const provider.ProviderEvent{&turn};
     var model = agent.model_client.ScriptedModelClient{ .turns = &turns };
-    var echo = agent.testing.EchoTool{};
-    const registrations = [_]agent.tool.ToolRegistration{echo.registration()};
-    var state = agent.state.AgentState.init(std.testing.allocator, .{ .max_iterations = 1 });
+    var terminating = TerminatingTool{};
+    const registrations = [_]agent.tool.ToolRegistration{terminating.registration()};
+    var state = agent.state.AgentState.init(std.testing.allocator, .{});
     defer state.deinit();
     var collector = agent.testing.AgentEventCollector.init(std.testing.allocator);
     defer collector.deinit();
     var runtime = makeRuntime(&state, model.client(), &collector, .{ .registrations = &registrations });
 
-    try std.testing.expectError(error.MaxIterationsExceeded, runtime.runUserText("x"));
-    try std.testing.expectEqual(agent.state.AgentStatus.failed, collector.events.items[collector.events.items.len - 1].status.?);
+    try runtime.runUserText("x");
+    try std.testing.expectEqual(@as(usize, 1), model.request_count);
+    try std.testing.expectEqual(@as(usize, 1), terminating.calls);
+    try std.testing.expectEqual(@as(usize, 3), state.messages.items.len);
+    try std.testing.expectEqual(agent.state.AgentStatus.completed, collector.events.items[collector.events.items.len - 1].status.?);
+}
+
+test "should stop after turn hook stops before follow-up provider request" {
+    const turn = [_]provider.ProviderEvent{ .{ .message_start = .{ .role = .assistant } }, .{ .tool_call_end = .{ .index = 0, .id = "call_1", .name = "echo", .arguments_json = "{}" } }, .message_end, .done };
+    const turns = [_][]const provider.ProviderEvent{&turn};
+    var model = agent.model_client.ScriptedModelClient{ .turns = &turns };
+    var echo = agent.testing.EchoTool{};
+    const registrations = [_]agent.tool.ToolRegistration{echo.registration()};
+    var state = agent.state.AgentState.init(std.testing.allocator, .{});
+    defer state.deinit();
+    var collector = agent.testing.AgentEventCollector.init(std.testing.allocator);
+    defer collector.deinit();
+    var runtime = makeRuntime(&state, model.client(), &collector, .{ .registrations = &registrations });
+    var stop = StopAfterTurn{};
+    runtime.hooks = .{ .ptr = &stop, .should_stop_after_turn = StopAfterTurn.hook };
+
+    try runtime.runUserText("x");
+    try std.testing.expectEqual(@as(usize, 1), model.request_count);
+    try std.testing.expectEqual(@as(usize, 1), echo.calls);
+    try std.testing.expectEqual(@as(usize, 1), stop.calls);
+    try std.testing.expectEqual(@as(usize, 1), stop.tool_result_count);
+    try std.testing.expectEqual(@as(usize, 3), stop.message_count);
+    try std.testing.expectEqual(@as(usize, 1), stop.assistant_index);
+    try std.testing.expectEqual(@as(usize, 2), stop.tool_result_start_index);
+    try std.testing.expectEqual(agent.state.AgentStatus.completed, collector.events.items[collector.events.items.len - 1].status.?);
 }
 
 test "provider stream parse error returns stream parse failure" {

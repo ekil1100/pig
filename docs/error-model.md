@@ -18,7 +18,7 @@ Pig uses stable error categories so CLI output, provider events, and future sess
 
 M1 provider code also exposes provider-local categories in `ProviderErrorKind`: `auth`, `provider`, `stream_parse`, `transport`, `rate_limit`, and `internal`.
 
-M2 agent runtime exposes `AgentRunError`: `ProviderFailed`, `ProviderStreamParseFailed`, `ToolNotFound`, `ToolFailed`, `MiddlewareRejected`, `MaxIterationsExceeded`, `Aborted`, `SinkRejectedEvent`, and `OutOfMemory`.
+M2 agent runtime exposes `AgentRunError`: `ProviderFailed`, `ProviderStreamParseFailed`, `ToolNotFound`, `ToolFailed`, `MiddlewareRejected`, `Aborted`, `SinkRejectedEvent`, and `OutOfMemory`.
 
 ## Exit Codes
 
@@ -45,7 +45,7 @@ If `before_input` rejects, no run has started: no user message and no lifecycle 
 
 If a provider already emitted `provider.error_event`, runtime maps it to one `AgentEvent.error_event` and does not synthesize a duplicate generic provider error for the same failure.
 
-Tool execution is sequential. Missing tools, executor failures, and max-iteration protection fail the turn. Middleware rejection after a tool result still deinitializes the owned tool result.
+Tool execution is sequential. Missing tools and executor failures fail the turn. Middleware rejection after a tool result still deinitializes the owned tool result. Tools can request a graceful stop by setting `ToolExecutionResult.terminate`; host middleware can request a graceful stop with `should_stop_after_turn`.
 
 ## Coding Tool Error Semantics
 

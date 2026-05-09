@@ -8,7 +8,6 @@ pub const AgentStatus = enum { idle, running, awaiting_provider, executing_tools
 pub const AgentConfig = struct {
     system_prompt: ?[]const u8 = null,
     thinking_level: ThinkingLevel = .off,
-    max_iterations: u32 = 8,
 };
 
 pub const AgentErrorInfo = struct { message: []const u8 };

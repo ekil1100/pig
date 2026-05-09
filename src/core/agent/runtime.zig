@@ -13,7 +13,6 @@ pub const AgentRunError = error{
     ToolNotFound,
     ToolFailed,
     MiddlewareRejected,
-    MaxIterationsExceeded,
     Aborted,
     SinkRejectedEvent,
 };
@@ -52,10 +51,8 @@ pub const AgentRuntime = struct {
         self.state.status = .running;
         self.state.appendUserText(text) catch |err| return self.failAfterTurn(turn_started, .failed, .internal, "failed to append user message", mapAlloc(err));
 
-        var iteration: u32 = 0;
-        while (iteration < self.state.config.max_iterations) {
+        while (true) {
             if (self.abortRequested()) return self.abortAfterTurn(turn_started, "aborted before provider request");
-            iteration += 1;
             self.state.status = .awaiting_provider;
             self.state.stream.resetRetainingCapacity(self.allocator);
 
@@ -81,16 +78,26 @@ pub const AgentRuntime = struct {
             if (bridge.aborted) return self.abortAfterTurn(turn_started, "aborted during provider stream");
             if (bridge.had_provider_error) return self.finalizeAfterTurn(turn_started, .failed, bridge.errorAfterProviderEvent());
 
+            const assistant_index = self.state.messages.items.len;
             self.state.appendAssistantFromStream() catch |err| return self.failAfterTurn(turn_started, .failed, .internal, "failed to append assistant message", mapAlloc(err));
 
             if (self.state.stream.tool_calls.items.len == 0) {
                 self.state.status = .completed;
                 try self.emit(.{ .turn_end = .{ .status = .completed } });
+                _ = self.hooks.callShouldStopAfterTurn(.{
+                    .state = self.state,
+                    .assistant_index = assistant_index,
+                    .tool_result_start_index = self.state.messages.items.len,
+                    .tool_result_count = 0,
+                });
                 try self.emit(.{ .agent_end = .{ .status = .completed } });
                 return;
             }
 
             self.state.status = .executing_tools;
+            var all_tool_results_terminate = true;
+            const tool_result_start_index = self.state.messages.items.len;
+            var tool_result_count: usize = 0;
             const order = self.toolExecutionOrder() catch |err| return self.failAfterTurn(turn_started, .failed, .internal, "failed to order tool calls", err);
             defer self.allocator.free(order);
             for (order) |pending_index| {
@@ -121,11 +128,26 @@ pub const AgentRuntime = struct {
                     try self.emit(.{ .tool_execution_end = .{ .id = result.tool_call_id, .name = call.name, .is_error = result.is_error, .content_json = result.content_json } });
                     self.hooks.callAfterToolResult(result) catch |err| return self.failAfterTurn(turn_started, .failed, .middleware, "middleware rejected tool result", mapMiddlewareError(err));
                     self.state.appendToolResult(result) catch |err| return self.failAfterTurn(turn_started, .failed, .internal, "failed to append tool result", mapAlloc(err));
+                    tool_result_count += 1;
+                    all_tool_results_terminate = all_tool_results_terminate and result.terminate;
                 }
             }
-        }
 
-        return self.failAfterTurn(turn_started, .failed, .internal, "max iterations exceeded", error.MaxIterationsExceeded);
+            self.state.status = .completed;
+            try self.emit(.{ .turn_end = .{ .status = .completed } });
+            const hook_should_stop = self.hooks.callShouldStopAfterTurn(.{
+                .state = self.state,
+                .assistant_index = assistant_index,
+                .tool_result_start_index = tool_result_start_index,
+                .tool_result_count = tool_result_count,
+            });
+            const should_stop = all_tool_results_terminate or hook_should_stop;
+            if (should_stop) {
+                try self.emit(.{ .agent_end = .{ .status = .completed } });
+                return;
+            }
+            try self.emit(.{ .turn_start = .{ .user_text = "" } });
+        }
     }
 
     fn toolExecutionOrder(self: *AgentRuntime) AgentRunError![]usize {
