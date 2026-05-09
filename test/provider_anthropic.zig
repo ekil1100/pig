@@ -36,6 +36,28 @@ test "anthropic tool use stream assembles tool call by content block index" {
     try std.testing.expectEqualStrings("{\"path\":\"README.md\"}", collector.events.items[4].arguments_json.?);
 }
 
+test "anthropic parser preserves malformed tool arguments for tool layer" {
+    var collector = provider.testing.EventCollector.init(std.testing.allocator);
+    defer collector.deinit();
+
+    const bytes =
+        "event: message_start\n" ++
+        "data: {\"message\":{\"id\":\"msg_1\",\"role\":\"assistant\"}}\n\n" ++
+        "event: content_block_start\n" ++
+        "data: {\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_bad\",\"name\":\"edit\"}}\n\n" ++
+        "event: content_block_delta\n" ++
+        "data: {\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\"}}\n\n" ++
+        "event: content_block_stop\n" ++
+        "data: {\"index\":0}\n\n" ++
+        "event: message_stop\n" ++
+        "data: {}\n\n";
+
+    try provider.anthropic.parseBytes(std.testing.allocator, bytes, collector.sink());
+    try std.testing.expectEqual(provider.ProviderEventTag.tool_call_end, collector.events.items[3].tag);
+    try std.testing.expectEqualStrings("toolu_bad", collector.events.items[3].id.?);
+    try std.testing.expectEqualStrings("{\"path\":", collector.events.items[3].arguments_json.?);
+}
+
 test "anthropic parser rejects malformed stream sequences" {
     var missing_stop = provider.testing.EventCollector.init(std.testing.allocator);
     defer missing_stop.deinit();

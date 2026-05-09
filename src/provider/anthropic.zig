@@ -154,10 +154,6 @@ const ParserState = struct {
         }
         if (self.block.is_tool) {
             if (self.block.args.items.len == 0) try self.block.args.appendSlice(self.allocator, "{}");
-            validateJson(self.allocator, self.block.args.items) catch {
-                try self.emitParseError("invalid tool call arguments JSON");
-                return error.StreamParseError;
-            };
             try self.sink.emit(.{ .tool_call_end = .{ .index = index, .id = self.block.id.items, .name = self.block.name.items, .arguments_json = self.block.args.items } });
         }
         self.block.active = false;
@@ -201,9 +197,4 @@ fn mapSseError(err: anyerror) ParseError {
         error.StreamParseError => error.StreamParseError,
         else => error.StreamParseError,
     };
-}
-
-fn validateJson(allocator: std.mem.Allocator, bytes: []const u8) !void {
-    var parsed = std.json.parseFromSlice(std.json.Value, allocator, bytes, .{}) catch return error.StreamParseError;
-    defer parsed.deinit();
 }

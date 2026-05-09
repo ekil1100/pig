@@ -454,6 +454,25 @@ test "interactive app preserves editor input while busy and supports abort" {
     try std.testing.expectEqual(pig.tui.editor.SubmitResult.abort, result);
 }
 
+test "interactive render tracks editor cursor inside input" {
+    var app = pig.app.interactive.InteractiveApp.init(std.testing.allocator, .{ .width = 40, .height = 8 }, .{});
+    defer app.deinit();
+
+    _ = try app.handleInput(.{ .kind = .char, .text = "a" });
+    _ = try app.handleInput(.{ .kind = .char, .text = "b" });
+    _ = try app.handleInput(.{ .kind = .char, .text = "c" });
+    _ = try app.handleInput(.{ .kind = .char, .text = "d" });
+    _ = try app.handleInput(.{ .kind = .arrow, .arrow = pig.tui.input.Direction.left });
+    _ = try app.handleInput(.{ .kind = .arrow, .arrow = pig.tui.input.Direction.left });
+
+    var frame = try app.renderFrame();
+    defer frame.deinit();
+
+    try std.testing.expect(frame.cursor != null);
+    try std.testing.expectEqual(@as(usize, 0), frame.cursor.?.row);
+    try std.testing.expectEqual(@as(usize, 4), frame.cursor.?.col);
+}
+
 test "interactive app saturates repeated upward scroll" {
     var app = pig.app.interactive.InteractiveApp.init(std.testing.allocator, .{ .width = 40, .height = 8 }, .{});
     defer app.deinit();
@@ -479,9 +498,26 @@ test "interactive render keeps transcript order when transcript overflows" {
     var frame = try app.renderFrame();
     defer frame.deinit();
 
-    try std.testing.expectEqualStrings("tool: bash ls -la /tmp/project", frame.lines.items[0]);
+    try std.testing.expectEqualStrings("you: inspect this project", frame.lines.items[0]);
+    try std.testing.expect(frameContains(&frame, "tool: bash ls -la /tmp/project"));
     try std.testing.expect(frameContains(&frame, "pig: final answer"));
-    try std.testing.expect(!frameContains(&frame, "you: inspect this project"));
+}
+
+test "interactive render applies scroll offset to viewport" {
+    var app = pig.app.interactive.InteractiveApp.init(std.testing.allocator, .{ .width = 80, .height = 3 }, .{});
+    defer app.deinit();
+
+    try appendTranscriptForTest(&app, .user, "first");
+    try appendTranscriptForTest(&app, .assistant, "second");
+    try appendTranscriptForTest(&app, .tool, "third");
+    try appendTranscriptForTest(&app, .assistant, "fourth");
+    try appendTranscriptForTest(&app, .assistant, "fifth");
+    app.scroll_offset = 2;
+
+    var frame = try app.renderFrame();
+    defer frame.deinit();
+
+    try std.testing.expectEqual(@as(?usize, 1), frame.viewport_top);
 }
 
 test "interactive event queue owns text and enforces capacity" {

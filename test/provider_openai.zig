@@ -34,6 +34,22 @@ test "openai compatible tool stream assembles tool call arguments" {
     try std.testing.expectEqualStrings("{\"path\":\"README.md\"}", collector.events.items[5].arguments_json.?);
 }
 
+test "openai compatible parser preserves malformed tool arguments for tool layer" {
+    var collector = provider.testing.EventCollector.init(std.testing.allocator);
+    defer collector.deinit();
+
+    const bytes =
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n" ++
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_bad\",\"function\":{\"name\":\"edit\",\"arguments\":\"{\\\"path\\\":\"}}]}}]}\n\n" ++
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n" ++
+        "data: [DONE]\n\n";
+
+    try provider.openai_compatible.parseBytes(std.testing.allocator, bytes, collector.sink());
+    try std.testing.expectEqual(provider.ProviderEventTag.tool_call_end, collector.events.items[3].tag);
+    try std.testing.expectEqualStrings("call_bad", collector.events.items[3].id.?);
+    try std.testing.expectEqualStrings("{\"path\":", collector.events.items[3].arguments_json.?);
+}
+
 test "openai compatible reasoning content maps to thinking deltas" {
     var collector = provider.testing.EventCollector.init(std.testing.allocator);
     defer collector.deinit();

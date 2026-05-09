@@ -221,7 +221,9 @@ pub const InteractiveApp = struct {
             },
             else => {},
         }
-        return try self.editor.handle(event, self.worker.busy);
+        const result = try self.editor.handle(event, self.worker.busy);
+        self.scroll_offset = 0;
+        return result;
     }
 
     const ScrollDirection = enum { up, down };
@@ -245,12 +247,11 @@ pub const InteractiveApp = struct {
         try self.transcript.append(self.allocator, item);
         if (kind == .user) {
             self.scroll_offset = 0;
-        } else if (kind == .status and std.mem.indexOfScalar(u8, text, '\n') != null) {
-            self.scroll_offset = std.math.maxInt(usize);
         }
     }
 
     fn appendToLastAssistant(self: *InteractiveApp, text: []const u8) !void {
+        self.markLastStreamingKindDone(.thinking);
         if (self.transcript.items.len == 0 or self.transcript.items[self.transcript.items.len - 1].kind != .assistant) {
             try self.appendItem(.assistant, "", true);
         }
@@ -258,16 +259,34 @@ pub const InteractiveApp = struct {
     }
 
     fn appendToLastThinking(self: *InteractiveApp, text: []const u8) !void {
+        self.markLastStreamingKindDone(.assistant);
         if (self.transcript.items.len == 0 or self.transcript.items[self.transcript.items.len - 1].kind != .thinking) {
             try self.appendItem(.thinking, "", true);
         }
         try self.transcript.items[self.transcript.items.len - 1].text.appendSlice(self.allocator, text);
     }
 
-    fn markAssistantDone(self: *InteractiveApp) void {
+    fn markStreamingTextDone(self: *InteractiveApp) void {
+        self.markLastStreamingKindDone(.assistant);
+        self.markLastStreamingKindDone(.thinking);
+    }
+
+    fn markLastStreamingKindDone(self: *InteractiveApp, kind: InteractiveEventKind) void {
         if (self.transcript.items.len == 0) return;
         const last = &self.transcript.items[self.transcript.items.len - 1];
-        if (last.kind == .assistant) last.is_streaming = false;
+        if (last.kind == kind) last.is_streaming = false;
+    }
+
+    fn markLastStreamingToolDone(self: *InteractiveApp) void {
+        var index = self.transcript.items.len;
+        while (index > 0) {
+            index -= 1;
+            const item = &self.transcript.items[index];
+            if (item.kind == .tool and item.is_streaming) {
+                item.is_streaming = false;
+                return;
+            }
+        }
     }
 
     fn setSystemPrompt(self: *InteractiveApp, prompt: ?[]const u8) !void {
@@ -286,49 +305,53 @@ pub const InteractiveApp = struct {
     pub fn renderFrame(self: *InteractiveApp) !tui.render.Frame {
         var frame = tui.render.Frame.init(self.allocator, self.size);
         errdefer frame.deinit();
-        var transcript_lines: std.ArrayList([]const u8) = .empty;
-        defer freeOwnedLines(self.allocator, &transcript_lines);
         var input_lines: std.ArrayList([]const u8) = .empty;
         defer freeOwnedLines(self.allocator, &input_lines);
 
         for (self.transcript.items) |*item| {
-            try appendTranscriptItemLines(self.allocator, &transcript_lines, item, self.size.width);
+            try appendTranscriptItemLines(self.allocator, &frame.lines, item, self.size.width);
         }
         if (self.worker.busy) {
-            try appendWrappedLines(self.allocator, &transcript_lines, "... running (Ctrl+C to abort)", self.size.width);
+            try appendWrappedLines(self.allocator, &frame.lines, "... running (Ctrl+C to abort)", self.size.width);
         }
+        const input_row_start = frame.lines.items.len;
         const input_line = try std.fmt.allocPrint(self.allocator, "> {s}", .{self.editor.text()});
         defer self.allocator.free(input_line);
         try appendWrappedLines(self.allocator, &input_lines, input_line, self.size.width);
+        const input_cursor = try editorCursorPosition(self.allocator, &self.editor, self.size.width);
 
-        const height: usize = @max(@as(usize, self.size.height), 1);
-        const input_height = @min(input_lines.items.len, height);
-        const transcript_height = height - input_height;
-        const max_scroll = transcript_lines.items.len -| transcript_height;
-        self.scroll_offset = @min(self.scroll_offset, max_scroll);
-
-        const transcript_start = if (transcript_lines.items.len <= transcript_height)
-            0
-        else
-            max_scroll - self.scroll_offset;
-        const transcript_end = @min(transcript_start + transcript_height, transcript_lines.items.len);
-        for (transcript_lines.items[transcript_start..transcript_end]) |line| {
+        for (input_lines.items) |line| {
             try frame.appendLine(line);
         }
 
-        const input_start = input_lines.items.len - input_height;
-        for (input_lines.items[input_start..]) |line| {
-            try frame.appendLine(line);
-        }
-
-        const cursor_line = if (input_height == 0) "" else input_lines.items[input_lines.items.len - 1];
+        const height = @max(@as(usize, self.size.height), 1);
+        const tail_top = frame.lines.items.len -| height;
+        self.scroll_offset = @min(self.scroll_offset, tail_top);
+        frame.viewport_top = tail_top -| self.scroll_offset;
         frame.cursor = .{
-            .row = @intCast(@min(frame.lines.items.len, height) -| 1),
-            .col = @intCast(@min(tui.layout.displayWidth(cursor_line), @as(usize, self.size.width) -| 1)),
+            .row = input_row_start + input_cursor.row_offset,
+            .col = @min(input_cursor.col, @as(usize, self.size.width) -| 1),
         };
         return frame;
     }
 };
+
+const EditorCursorPosition = struct {
+    row_offset: usize,
+    col: usize,
+};
+
+fn editorCursorPosition(allocator: std.mem.Allocator, editor: *const tui.editor.EditorState, width: u16) !EditorCursorPosition {
+    const cursor_prefix = try std.fmt.allocPrint(allocator, "> {s}", .{editor.text()[0..editor.cursor_byte]});
+    defer allocator.free(cursor_prefix);
+    const wrapped = try tui.layout.wrapText(allocator, cursor_prefix, width);
+    defer tui.layout.freeLines(allocator, wrapped);
+    const last_line = if (wrapped.len == 0) "" else wrapped[wrapped.len - 1];
+    return .{
+        .row_offset = wrapped.len -| 1,
+        .col = tui.layout.displayWidth(last_line),
+    };
+}
 
 fn appendWrappedLines(allocator: std.mem.Allocator, lines: *std.ArrayList([]const u8), text: []const u8, width: u16) !void {
     const wrapped = try tui.layout.wrapText(allocator, text, width);
@@ -356,76 +379,6 @@ fn appendTranscriptItemLines(allocator: std.mem.Allocator, lines: *std.ArrayList
     defer allocator.free(line);
     try appendWrappedLines(allocator, lines, line, width);
 }
-
-fn appendInputLines(allocator: std.mem.Allocator, lines: *std.ArrayList([]const u8), app: *const InteractiveApp) !void {
-    const input_line = try std.fmt.allocPrint(allocator, "> {s}", .{app.editor.text()});
-    defer allocator.free(input_line);
-    try appendWrappedLines(allocator, lines, input_line, app.size.width);
-}
-
-fn trailingLiveTranscriptStart(app: *const InteractiveApp) usize {
-    var index = app.transcript.items.len;
-    while (index > 0 and app.transcript.items[index - 1].is_streaming) {
-        index -= 1;
-    }
-    return index;
-}
-
-const LiveRenderer = struct {
-    allocator: std.mem.Allocator,
-    flushed_items: usize = 0,
-    live_height: usize = 0,
-
-    fn init(allocator: std.mem.Allocator) LiveRenderer {
-        return .{ .allocator = allocator };
-    }
-
-    fn render(self: *LiveRenderer, app: *const InteractiveApp, output: *std.Io.Writer) !void {
-        try self.clearLive(output);
-
-        const stable_end = trailingLiveTranscriptStart(app);
-        var stable_lines: std.ArrayList([]const u8) = .empty;
-        defer freeOwnedLines(self.allocator, &stable_lines);
-        for (app.transcript.items[self.flushed_items..stable_end]) |*item| {
-            try appendTranscriptItemLines(self.allocator, &stable_lines, item, app.size.width);
-        }
-        for (stable_lines.items) |line| {
-            try output.print("{s}\r\n", .{line});
-        }
-        self.flushed_items = stable_end;
-
-        var live_lines: std.ArrayList([]const u8) = .empty;
-        defer freeOwnedLines(self.allocator, &live_lines);
-        for (app.transcript.items[stable_end..]) |*item| {
-            try appendTranscriptItemLines(self.allocator, &live_lines, item, app.size.width);
-        }
-        if (app.worker.busy) {
-            try appendWrappedLines(self.allocator, &live_lines, "... running (Ctrl+C to abort)", app.size.width);
-        }
-        try appendInputLines(self.allocator, &live_lines, app);
-
-        for (live_lines.items, 0..) |line, index| {
-            if (index > 0) try output.writeAll("\r\n");
-            try output.writeAll(line);
-        }
-        self.live_height = live_lines.items.len;
-    }
-
-    fn finish(self: *LiveRenderer, output: *std.Io.Writer) void {
-        self.clearLive(output) catch {};
-        output.writeAll("\r\n") catch {};
-    }
-
-    fn clearLive(self: *LiveRenderer, output: *std.Io.Writer) !void {
-        if (self.live_height == 0) return;
-        try output.writeAll("\r\x1b[2K");
-        var row: usize = 1;
-        while (row < self.live_height) : (row += 1) {
-            try output.writeAll("\x1b[1A\r\x1b[2K");
-        }
-        self.live_height = 0;
-    }
-};
 
 pub fn runScript(config: args.RunConfig, context: Context, input_bytes: []const u8, output: *std.Io.Writer) !InteractiveStatus {
     var app = InteractiveApp.init(context.allocator, context.size, .{
@@ -486,10 +439,11 @@ pub fn runLive(config: args.RunConfig, context: Context, io: std.Io, output: *st
         output.flush() catch {};
     };
 
-    var live_renderer = LiveRenderer.init(context.allocator);
+    var live_renderer = tui.render.TerminalRenderer.init(context.allocator);
+    defer live_renderer.deinit();
     defer live_renderer.finish(output);
 
-    try live_renderer.render(&app, output);
+    try renderLiveApp(&live_renderer, &app, output);
     try output.flush();
 
     var active_turn: ?*ActiveTurn = null;
@@ -502,12 +456,15 @@ pub fn runLive(config: args.RunConfig, context: Context, io: std.Io, output: *st
                 if (size.width != app.size.width or size.height != app.size.height) {
                     app.size = size;
                     session.size = size;
-                    try live_renderer.render(&app, output);
+                    try renderLiveApp(&live_renderer, &app, output);
                     try output.flush();
                 }
             }
         }
-        try pumpActiveTurn(&active_turn, &app, &live_renderer, output);
+        if (try pumpActiveTurn(&active_turn, &app)) {
+            try renderLiveApp(&live_renderer, &app, output);
+            try output.flush();
+        }
         const poll_timeout: i32 = if (active_turn == null) if (interactive_tty) 250 else -1 else 25;
         var poll_fds = [_]std.posix.pollfd{.{
             .fd = std.posix.STDIN_FILENO,
@@ -552,15 +509,15 @@ pub fn runLive(config: args.RunConfig, context: Context, io: std.Io, output: *st
 
 const InputStatus = enum { continue_loop, exit_ok, failure, internal };
 
-fn handleLiveInputEvent(config: args.RunConfig, context: Context, app: *InteractiveApp, active_turn: *?*ActiveTurn, renderer: *LiveRenderer, event: tui.input.KeyEvent, output: *std.Io.Writer) !InputStatus {
+fn handleLiveInputEvent(config: args.RunConfig, context: Context, app: *InteractiveApp, active_turn: *?*ActiveTurn, renderer: *tui.render.TerminalRenderer, event: tui.input.KeyEvent, output: *std.Io.Writer) !InputStatus {
     const result = try app.handleInput(event);
     switch (result) {
-        .none => try renderer.render(app, output),
+        .none => try renderLiveApp(renderer, app, output),
         .exit => {
             if (active_turn.*) |turn| {
                 turn.requestAbort();
                 try app.appendItem(.status, "abort requested", false);
-                try renderer.render(app, output);
+                try renderLiveApp(renderer, app, output);
                 return .continue_loop;
             }
             return .exit_ok;
@@ -569,31 +526,32 @@ fn handleLiveInputEvent(config: args.RunConfig, context: Context, app: *Interact
             if (active_turn.*) |turn| turn.requestAbort();
             app.worker.requestAbort();
             try app.appendItem(.status, "abort requested", false);
-            try renderer.render(app, output);
+            try renderLiveApp(renderer, app, output);
         },
         .submit => |prompt| {
             var prompt_owned = true;
             defer if (prompt_owned) app.editor.freeSubmitted(prompt);
             if (commands.isCommandInput(prompt)) {
                 const command_status = try handleCommand(context, app, prompt, active_turn);
-                try renderer.render(app, output);
+                try renderLiveApp(renderer, app, output);
                 return command_status;
             }
             if (active_turn.* != null) {
                 try app.appendItem(.status, "turn already running", false);
-                try renderer.render(app, output);
+                try renderLiveApp(renderer, app, output);
                 return .continue_loop;
             }
             var model_prompt = try prepareSubmittedPrompt(context.allocator, prompt);
             defer model_prompt.deinit(context.allocator);
             try app.appendItem(.user, model_prompt.text, false);
-            try renderer.render(app, output);
+            try renderLiveApp(renderer, app, output);
             const model = app.model_client orelse {
                 try app.appendItem(.error_item, "model client unavailable", false);
-                try renderer.render(app, output);
+                try renderLiveApp(renderer, app, output);
                 return if (context.recover_missing_model) .continue_loop else .failure;
             };
             active_turn.* = try ActiveTurn.start(config, context, app, model, model_prompt.text);
+            try renderLiveApp(renderer, app, output);
             if (model_prompt.owned) {
                 model_prompt.owned = false;
             } else {
@@ -725,8 +683,8 @@ const ActiveTurn = struct {
     }
 };
 
-fn pumpActiveTurn(active_turn: *?*ActiveTurn, app: *InteractiveApp, renderer: *LiveRenderer, output: *std.Io.Writer) !void {
-    const turn = active_turn.* orelse return;
+fn pumpActiveTurn(active_turn: *?*ActiveTurn, app: *InteractiveApp) !bool {
+    const turn = active_turn.* orelse return false;
     var changed = try drainQueuedEvents(turn, app);
     if (turn.done.load(.acquire)) {
         if (try drainQueuedEvents(turn, app)) changed = true;
@@ -734,10 +692,7 @@ fn pumpActiveTurn(active_turn: *?*ActiveTurn, app: *InteractiveApp, renderer: *L
         turn.finish(app);
         changed = true;
     }
-    if (changed) {
-        try renderer.render(app, output);
-        try output.flush();
-    }
+    return changed;
 }
 
 fn drainQueuedEvents(turn: *ActiveTurn, app: *InteractiveApp) !bool {
@@ -755,13 +710,19 @@ fn applyQueuedEvent(app: *InteractiveApp, event: QueuedInteractiveEvent) !void {
     switch (event.kind) {
         .assistant => {
             if (!event.is_streaming and event.text.items.len == 0) {
-                app.markAssistantDone();
+                app.markStreamingTextDone();
             } else {
                 try app.appendToLastAssistant(event.text.items);
             }
         },
         .thinking => try app.appendToLastThinking(event.text.items),
-        .tool => try app.appendItem(.tool, event.text.items, event.is_streaming),
+        .tool => {
+            if (!event.is_streaming and event.text.items.len == 0) {
+                app.markLastStreamingToolDone();
+            } else {
+                try app.appendItem(.tool, event.text.items, event.is_streaming);
+            }
+        },
         .error_item => try app.appendItem(.error_item, event.text.items, event.is_streaming),
         .status => try app.appendItem(.status, event.text.items, event.is_streaming),
         .user => try app.appendItem(.user, event.text.items, event.is_streaming),
@@ -792,8 +753,11 @@ const QueueSink = struct {
             },
             .message_end => try self.queue.push(.assistant, "", false),
             .tool_execution_start => |tool_event| try pushToolStart(self.queue, self.queue.allocator, tool_event.name, tool_event.arguments_json),
-            .tool_execution_delta => |delta| try self.queue.push(.tool, delta.message, true),
-            .tool_execution_end => |tool_event| if (tool_event.is_error) try pushToolError(self.queue, self.queue.allocator, tool_event.content_json),
+            .tool_execution_delta => |delta| try self.queue.push(.tool, delta.message, false),
+            .tool_execution_end => |tool_event| {
+                try self.queue.push(.tool, "", false);
+                if (tool_event.is_error) try pushToolError(self.queue, self.queue.allocator, tool_event.content_json);
+            },
             .error_event => |err| try self.queue.push(.error_item, err.message, false),
             .abort => try self.queue.push(.status, "aborted", false),
             else => {},
@@ -852,7 +816,7 @@ fn jsonString(value: ?std.json.Value) ?[]const u8 {
 fn pushToolStart(queue: *SharedInteractiveEventQueue, allocator: std.mem.Allocator, name: []const u8, arguments_json: []const u8) !void {
     const text = try toolStartText(allocator, name, arguments_json);
     defer allocator.free(text);
-    try queue.push(.tool, text, true);
+    try queue.push(.tool, text, false);
 }
 
 fn pushToolError(queue: *SharedInteractiveEventQueue, allocator: std.mem.Allocator, content_json: []const u8) !void {
@@ -993,9 +957,15 @@ fn runTurn(config: args.RunConfig, context: Context, app: *InteractiveApp, model
 fn renderApp(app: *InteractiveApp, output: *std.Io.Writer) !void {
     var frame = try app.renderFrame();
     defer frame.deinit();
-    const bytes = try tui.render.renderFull(app.allocator, &frame);
+    const bytes = try tui.render.renderDocument(app.allocator, &frame);
     defer app.allocator.free(bytes);
     try output.writeAll(bytes);
+}
+
+fn renderLiveApp(renderer: *tui.render.TerminalRenderer, app: *InteractiveApp, output: *std.Io.Writer) !void {
+    var frame = try app.renderFrame();
+    defer frame.deinit();
+    try renderer.render(&frame, output);
 }
 
 const InteractiveSink = struct {
@@ -1019,19 +989,22 @@ const InteractiveSink = struct {
                 if (delta.thinking_delta) |text| try self.app.appendToLastThinking(text);
                 if (delta.text_delta) |text| try self.app.appendToLastAssistant(text);
             },
-            .message_end => self.app.markAssistantDone(),
+            .message_end => self.app.markStreamingTextDone(),
             .tool_execution_start => |tool| {
                 const text = try toolStartText(self.app.allocator, tool.name, tool.arguments_json);
                 defer self.app.allocator.free(text);
-                try self.app.appendItem(.tool, text, true);
-            },
-            .tool_execution_delta => |delta| try self.app.appendItem(.tool, delta.message, true),
-            .tool_execution_end => |tool| if (tool.is_error) {
-                const reason = try toolErrorText(self.app.allocator, tool.content_json);
-                defer self.app.allocator.free(reason);
-                const text = try std.fmt.allocPrint(self.app.allocator, "error {s}", .{reason});
-                defer self.app.allocator.free(text);
                 try self.app.appendItem(.tool, text, false);
+            },
+            .tool_execution_delta => |delta| try self.app.appendItem(.tool, delta.message, false),
+            .tool_execution_end => |tool| {
+                self.app.markLastStreamingToolDone();
+                if (tool.is_error) {
+                    const reason = try toolErrorText(self.app.allocator, tool.content_json);
+                    defer self.app.allocator.free(reason);
+                    const text = try std.fmt.allocPrint(self.app.allocator, "error {s}", .{reason});
+                    defer self.app.allocator.free(text);
+                    try self.app.appendItem(.tool, text, false);
+                }
             },
             .error_event => |err| try self.app.appendItem(.error_item, err.message, false),
             .abort => try self.app.appendItem(.status, "aborted", false),

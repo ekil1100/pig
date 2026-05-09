@@ -25,6 +25,13 @@ install mode="release":
     esac; \
     zig build -Doptimize="$optimize"
     mkdir -p "{{install_dir}}"
-    cp zig-out/bin/pig "{{install_dir}}/pig"
-    chmod 755 "{{install_dir}}/pig"
+    tmp="{{install_dir}}/.pig.tmp.$$"; \
+    trap 'rm -f "$tmp"' EXIT HUP INT TERM; \
+    cp zig-out/bin/pig "$tmp"; \
+    chmod 755 "$tmp"; \
+    if command -v codesign >/dev/null 2>&1 && [ "$(uname -s)" = "Darwin" ]; then \
+      codesign -f -s - "$tmp"; \
+    fi; \
+    mv -f "$tmp" "{{install_dir}}/pig"; \
+    trap - EXIT HUP INT TERM
     "{{install_dir}}/pig" --version

@@ -1,8 +1,23 @@
 # Pig
 
 - Local-first coding-agent project implemented in Zig.
-- 不懂得参考 pi-mono 源码 https://github.com/badlogic/pi-mono，他的架构设计理念值得学习，不要自己瞎搞。
 - zig version > 0.16.0
+
+## 碰到问题可以借鉴 pi 的实现
+
+更新 pi 到最新版本。
+
+```shell
+pi update
+```
+
+pi 是一个 npm 包，它源码就在对应的 npm 包里。
+
+如果本地没有安装 pi，你可以自己 clone 一个临时的查看代码.
+
+pi 源码地址：
+
+https://github.com/badlogic/pi-mono
 
 ## test workflow
 

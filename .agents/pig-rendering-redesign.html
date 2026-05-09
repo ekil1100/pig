@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pig interactive renderer redesign</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --surface: #ffffff;
+      --surface-alt: #fbfcfe;
+      --text: #192233;
+      --muted: #647083;
+      --line: #d9dfe8;
+      --accent: #2f6f73;
+      --accent-soft: #e7f2f1;
+      --code: #f1f4f8;
+      --done: #087f5b;
+      --doing: #a15c07;
+      --todo: #315b9d;
+      --blocked: #b42318;
+      --shadow: 0 18px 45px rgba(25, 34, 51, .08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.65 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+    .page { width: min(1180px, calc(100% - 40px)); margin: 32px auto 56px; }
+    .hero, .section { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+    .hero { padding: 30px; }
+    .section { padding: 22px; margin-top: 18px; box-shadow: 0 8px 24px rgba(25, 34, 51, .04); }
+    .eyebrow { margin: 0 0 8px; color: var(--accent); font-size: 12px; font-weight: 760; letter-spacing: .08em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(28px, 5vw, 44px); line-height: 1.08; letter-spacing: 0; }
+    h2 { margin: 0 0 14px; font-size: 22px; line-height: 1.25; letter-spacing: 0; }
+    h3 { margin: 18px 0 8px; font-size: 17px; line-height: 1.35; letter-spacing: 0; }
+    p { margin: 0 0 12px; }
+    p:last-child { margin-bottom: 0; }
+    ul, ol { margin: 0 0 12px; padding-left: 1.25rem; }
+    li + li { margin-top: 6px; }
+    code { padding: .14rem .36rem; border-radius: 6px; background: var(--code); font-size: .92em; overflow-wrap: anywhere; }
+    pre { margin: 14px 0; padding: 16px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--code); }
+    pre code { padding: 0; background: transparent; }
+    .lead { max-width: 860px; margin-top: 12px; color: var(--muted); font-size: 16px; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+    .pill, .status { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+    .pill { border: 1px solid var(--line); background: var(--surface-alt); color: var(--muted); overflow-wrap: anywhere; }
+    .status.done { color: var(--done); background: #e7f8f1; }
+    .status.doing { color: var(--doing); background: #fff4e6; }
+    .status.todo { color: #315b9d; background: #eaf1ff; }
+    .status.blocked { color: var(--blocked); background: #fff0f0; }
+    .insight-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 14px 0; }
+    .insight-card { min-width: 0; padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: linear-gradient(180deg, #fff 0%, var(--surface-alt) 100%); }
+    .insight-card strong { display: block; margin-bottom: 6px; color: var(--accent); font-size: 13px; text-transform: uppercase; }
+    .callout { margin: 14px 0; padding: 14px 16px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; background: var(--accent-soft); }
+    .callout.important { border-left-color: var(--blocked); background: #fff7f7; }
+    .callout.warning { border-left-color: var(--doing); background: #fff8ed; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
+    table { width: 100%; min-width: 760px; border-collapse: collapse; background: #fff; }
+    th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+    th { background: #f3f6fb; color: var(--muted); font-size: 12px; text-transform: uppercase; }
+    .mermaid, .diagram-box { margin: 14px 0; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: #fff; overflow-x: auto; }
+    .timeline { display: grid; gap: 10px; margin: 14px 0; counter-reset: phase; }
+    .timeline-item { position: relative; padding: 14px 14px 14px 50px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-alt); }
+    .timeline-item::before { counter-increment: phase; content: counter(phase); position: absolute; left: 14px; top: 14px; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 12px; font-weight: 800; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .source-map { columns: 2 320px; column-gap: 28px; }
+    .source-map li { break-inside: avoid; }
+    @media (max-width: 780px) {
+      .page { width: min(100% - 24px, 1180px); margin-top: 18px; }
+      .hero, .section { padding: 18px; }
+      .two-col { grid-template-columns: 1fr; }
+      table { min-width: 640px; }
+    }
+    @media print { body { background: #fff; } .page { width: auto; margin: 0; } .hero, .section { box-shadow: none; break-inside: avoid; } }
+  </style>
+  <script defer src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+  <script>
+    window.addEventListener("DOMContentLoaded", () => {
+      if (window.mermaid) mermaid.initialize({ startOnLoad: true, theme: "base" });
+    });
+  </script>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <p class="eyebrow">Plan View · Understanding Edition</p>
+      <h1>Pig interactive renderer redesign</h1>
+      <p class="lead">这份页面不是 Markdown 复刻，而是把源计划整理成工程评审视图：先看根因和目标模型，再看模块边界、迁移阶段、验证矩阵和禁止事项。</p>
+      <div class="meta">
+        <span class="pill">Source: /Users/like/workspace/pig/.agents/pig-rendering-redesign.md</span>
+        <span class="pill">Updated: 2026-05-10 CST</span>
+        <span class="pill">Format: Markdown → synthesized HTML</span>
+      </div>
+    </header>
+
+    <section class="section">
+      <h2>一眼看懂</h2>
+      <div class="insight-grid">
+        <article class="insight-card"><strong>核心判断</strong><p>问题不是单个 ANSI 序列，而是 Pig 同时存在 transcript append、streaming stdout、footer overlay 和 scripted full-frame 多套渲染路径。</p></article>
+        <article class="insight-card"><strong>目标模型</strong><p>改成 Pi-style scrollback-preserving document renderer：所有 UI 都先变成 logical lines，再由唯一 renderer 写 terminal。</p></article>
+        <article class="insight-card"><strong>优先修复</strong><p>先解决 terminal ownership 和 frame 更新，再做组件化和更漂亮的 Markdown/footer。</p></article>
+        <article class="insight-card"><strong>最大收益</strong><p>streaming 内容不再重复，busy status 和输入行不会插进 assistant markdown，resize/wrap 由统一 renderer 处理。</p></article>
+      </div>
+      <aside class="callout important"><strong>重点：</strong>任何 provider、tool、agent event 都不能直接写 ANSI。它们只能更新状态；terminal 写入只能由 renderer 统一执行。</aside>
+    </section>
+
+    <section class="section">
+      <h2>根因诊断</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>表象</th><th>当前冲突路径</th><th>重设计后的归属</th></tr></thead>
+          <tbody>
+            <tr><td>assistant streaming 时旧快照留在 scrollback，内容重复</td><td>streaming delta 直接写 stdout，同时 transcript 也 append</td><td>delta 只更新 AssistantMessage component；renderer 从完整 logical lines diff</td></tr>
+            <tr><td><code>... running</code> 和 <code>&gt;</code> 输入行插入 markdown 中间</td><td>footer/prompt 用 save/restore cursor 伪固定到底部</td><td>footer/editor/status 都是 document 末尾组件</td></tr>
+            <tr><td>复杂 markdown、表格、目录树 streaming 中横向偏移</td><td>writer 不统一，wrap/width 不在单一 layout 层收敛</td><td>所有 component 输出必须满足 visible width 不超过 terminal width</td></tr>
+            <tr><td>输入行消失</td><td>incremental streaming 绕过 prompt/footer 统一重绘</td><td>输入行由 Editor component + cursor marker 渲染</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>目标架构图</h2>
+      <pre class="mermaid">flowchart TD
+  P[provider / tool events] --> A[core.agent events]
+  A --> R[app interactive reducer]
+  R --> S[InteractiveState]
+  S --> V[ViewModel / Component tree]
+  V --> L[logical lines]
+  L --> T[tui renderer
+full / diff / viewport / cursor]
+  T --> X[Terminal]
+
+  subgraph Ownership
+    App[app owns business state]
+    Tui[tui owns terminal, input, layout, width, render]
+  end
+
+  R -. maps state .-> App
+  T -. writes ANSI only here .-> Tui</pre>
+      <p>读法：业务层表达“要显示什么”，TUI 层独占“如何写 terminal”。这条边界是整个计划的主轴。</p>
+    </section>
+
+    <section class="section">
+      <h2>模块边界</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>区域</th><th>新增/目标模块</th><th>职责</th><th>边界规则</th></tr></thead>
+          <tbody>
+            <tr><td><code>src/tui</code></td><td><code>component.zig</code>, <code>screen.zig</code>, <code>renderer.zig</code>, <code>terminal.zig</code>, <code>virtual_terminal.zig</code></td><td>组件、frame、viewport、cursor、terminal lifecycle、测试 emulator</td><td>不 import app/core/provider/session/tools</td></tr>
+            <tr><td><code>src/app/interactive</code></td><td><code>state.zig</code>, <code>view.zig</code>, <code>runner.zig</code></td><td>reducer、state → component/logical lines、live/scripted event loop</td><td>不直接拼 terminal ANSI</td></tr>
+            <tr><td>临时过渡</td><td>保留 <code>src/app/interactive.zig</code></td><td>避免一次性大拆目录</td><td>必须先替换 LiveRenderer，并删除 streaming stdout 路径</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>渲染循环和 cursor 模型</h2>
+      <div class="two-col">
+        <div>
+          <h3>事件循环</h3>
+          <pre><code>while running:
+  drain input events
+  drain agent event queue
+  apply events to InteractiveState
+  if state changed:
+    requestRender()
+  renderer.renderIfDue(stateToFrame(state))</code></pre>
+          <p>render 请求只置脏，streaming 忙时按 16-33ms coalesce；输入编辑可以立即渲染。</p>
+        </div>
+        <div>
+          <h3>cursor 定位</h3>
+          <ol>
+            <li>Editor 在 logical cursor 位置插入 zero-width marker。</li>
+            <li>Renderer 查找 marker，计算 display width。</li>
+            <li>剥掉 marker，渲染 frame。</li>
+            <li>最后把硬件光标定位到 marker 对应位置。</li>
+          </ol>
+          <aside class="callout warning">这替代 <code>\x1b7</code> / <code>\x1b8</code> save/restore cursor 修补，避免 prompt 被 streaming markdown 撞散。</aside>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>迁移路线</h2>
+      <div class="timeline">
+        <article class="timeline-item"><h3>停止扩展 LiveRenderer</h3><p>标记待删除，停止向 <code>streamTextItem</code> / <code>renderStreamingFooter</code> 添加修补逻辑。验收标准是后续 PR 不再增加 save/restore cursor footer 补丁。</p></article>
+        <article class="timeline-item"><h3>引入 logical document renderer</h3><p>新增 <code>tui/renderer.zig</code>，维护完整 logical lines、viewport state 和 single-buffer flush。覆盖 append、middle-line change、shrink、resize、cursor marker。</p></article>
+        <article class="timeline-item"><h3>统一 interactive render path</h3><p><code>InteractiveApp.renderFrame()</code> 生成完整 logical document；live 用 TerminalRenderer，scripted 用同一 frame snapshot。删除旧的 streaming/live 高度状态。</p></article>
+        <article class="timeline-item"><h3>组件化 transcript/status/editor/footer</h3><p>把 transcript 拼接抽到 component/view 层，Editor 输出 cursor marker，Tool/status/busy/footer 都作为普通 component。</p></article>
+        <article class="timeline-item"><h3>真实 viewport regression</h3><p>新增 pure Zig virtual terminal 或 opt-in headless xterm runner，固化长 markdown streaming、tool lines、running status、prompt/footer 场景。</p></article>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>阶段验收表</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Slice</th><th>主要产出</th><th>验收信号</th><th>为什么先/后</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>冻结 LiveRenderer 扩展方向</td><td>文档落地；不再新增 footer 修补</td><td>先阻止旧模型继续长出新分支</td></tr>
+            <tr><td>2</td><td><code>tui/renderer.zig</code> logical-line diff renderer</td><td><code>test/tui_render.zig</code> 覆盖 append/change/shrink/resize/cursor</td><td>先解决 terminal owner 和 frame 更新</td></tr>
+            <tr><td>3</td><td>live/scripted 共用 <code>state -> logical lines</code></td><td>streaming 不重复；busy/input 不插入 markdown；多轮不丢 prompt</td><td>把最痛的用户可见问题拉回同一渲染路径</td></tr>
+            <tr><td>4</td><td>Transcript、Editor、Footer 等 component 化</td><td><code>interactive.zig</code> 不直接拼 ANSI；<code>tui</code> 不依赖业务模块</td><td>在正确 render model 上整理 UI 结构</td></tr>
+            <tr><td>5</td><td>viewport regression</td><td>scripted regression 默认覆盖；live regression opt-in</td><td>最后固化真实终端行为，避免 CI 被 TTY smoke 卡住</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>测试矩阵</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>测试面</th><th>必须覆盖</th><th>对应风险</th></tr></thead>
+          <tbody>
+            <tr><td>Streaming markdown</td><td>每个 delta 只出现一次；message_end 与最后 delta 同 pump 不丢内容</td><td>重复输出、尾部丢字</td></tr>
+            <tr><td>Tool/status</td><td>tool start/end 不重复打印；busy status 出现/消失不覆盖 assistant 文本</td><td>状态行插入正文</td></tr>
+            <tr><td>Editor</td><td>busy 时可继续输入，输入文本保持可见</td><td>输入行消失或跳位</td></tr>
+            <tr><td>Resize</td><td>width resize 重新 wrap；height resize viewport 对齐</td><td>旧 viewport 覆盖新内容</td></tr>
+            <tr><td>Content shrink</td><td>stale lines 被清除</td><td>旧快照残留</td></tr>
+            <tr><td>Width edge cases</td><td>CJK、emoji、ANSI style、code fence、table-like text 不触发 auto-wrap drift</td><td>终端自动换行导致横向漂移</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>建议 fixture：<code>fixtures/tui/stream-markdown-with-tools.jsonl</code>、<code>fixtures/tui/viewport-overwrite.jsonl</code>、<code>fixtures/tui/busy-input-preserved.jsonl</code>。</p>
+    </section>
+
+    <section class="section">
+      <h2>不要做什么</h2>
+      <div class="insight-grid">
+        <article class="insight-card"><strong>不要直写 terminal</strong><p>provider parser 或 AgentRuntime 不直接输出 terminal 文本。</p></article>
+        <article class="insight-card"><strong>不要 delta writeAll</strong><p>streaming 分支不再直接 <code>writeAll(delta)</code>。</p></article>
+        <article class="insight-card"><strong>不要 save/restore prompt</strong><p>主输入行不再靠 <code>\x1b7</code> / <code>\x1b8</code> 维护。</p></article>
+        <article class="insight-card"><strong>不要双 renderer</strong><p>不要同时维护 scrollback append renderer 和 fixed-bottom renderer。</p></article>
+      </div>
+      <aside class="callout important">落地顺序：先做 <code>tui/renderer.zig</code> 的 Pi-style logical-line diff，再切 live interactive，最后组件化和美化。</aside>
+    </section>
+
+    <section class="section">
+      <h2>源计划映射</h2>
+      <p>上面的图表和矩阵来自源 plan 的这些段落；这里保留索引，方便回到原文查细节。</p>
+      <ol class="source-map">
+        <li>背景：四类渲染异常和多 writer 冲突。</li>
+        <li>Pi-mono 参考结论：component tree、previousLines、viewport、cursor marker、headless xterm regression。</li>
+        <li>设计决策：Pi-style scrollback-preserving document renderer。</li>
+        <li>目标架构：provider/tool events 到 Terminal 的单向链路。</li>
+        <li>新模块建议：<code>src/tui/*</code> 和 <code>src/app/interactive/*</code> 分层。</li>
+        <li>Renderer 数据结构：LogicalFrame 和 TerminalRenderer 状态。</li>
+        <li>渲染循环：drain events、apply state、requestRender、renderIfDue。</li>
+        <li>组件模型：Container/Text/Markdown/TranscriptItem/Editor/Footer/Loader。</li>
+        <li>Cursor 和输入行：zero-width marker 替代 save/restore cursor。</li>
+        <li>宽度、换行和 ANSI：统一到 <code>tui/layout.zig</code>。</li>
+        <li>Terminal lifecycle：raw mode、cursor、bracketed paste、size、synchronized output。</li>
+        <li>Scripted/live mode：共用 <code>state -> logical lines</code>，输出策略分层。</li>
+        <li>迁移计划、测试矩阵、明确不要做的事、推荐落地顺序。</li>
+      </ol>
+    </section>
+  </main>
+</body>
+</html>
