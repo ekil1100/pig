@@ -540,6 +540,21 @@ test "interactive event queue owns text and enforces capacity" {
     try std.testing.expect(queue.popFront() == null);
 }
 
+test "interactive event queue coalesces streaming deltas before capacity check" {
+    var queue = pig.app.interactive.InteractiveEventQueue.init(std.testing.allocator);
+    defer queue.deinit();
+    queue.capacity = 1;
+
+    try queue.push(.assistant, "hel", true);
+    try queue.push(.assistant, "lo", true);
+
+    var event = queue.popFront().?;
+    defer event.deinit(std.testing.allocator);
+    try std.testing.expectEqual(pig.app.interactive.InteractiveEventKind.assistant, event.kind);
+    try std.testing.expectEqualStrings("hello", event.text.items);
+    try std.testing.expect(event.is_streaming);
+}
+
 fn appendTranscriptForTest(app: *pig.app.interactive.InteractiveApp, kind: pig.app.interactive.InteractiveEventKind, text: []const u8) !void {
     var item_text: std.ArrayList(u8) = .empty;
     errdefer item_text.deinit(std.testing.allocator);

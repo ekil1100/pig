@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const root = @import("mod.zig");
 const layout = @import("layout.zig");
 
-pub const interactive_enter_sequence = "\x1b[?25l";
+pub const interactive_enter_sequence = "\x1b[?25h";
 pub const interactive_exit_sequence = "\x1b[?25h";
 
 pub const TerminalSession = struct {

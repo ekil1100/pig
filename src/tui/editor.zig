@@ -1,5 +1,6 @@
 const std = @import("std");
 const input = @import("input.zig");
+const layout = @import("layout.zig");
 
 pub const SubmitResult = union(enum) {
     none,
@@ -90,7 +91,7 @@ pub const EditorState = struct {
 
     fn backspace(self: *EditorState) !void {
         if (self.cursor_byte == 0) return;
-        const start = previousCodepointStart(self.buffer.items, self.cursor_byte);
+        const start = layout.previousDisplayUnitStart(self.buffer.items, self.cursor_byte);
         try self.buffer.replaceRange(self.allocator, start, self.cursor_byte - start, "");
         self.cursor_byte = start;
         self.history_index = null;
@@ -98,28 +99,28 @@ pub const EditorState = struct {
 
     fn deleteForward(self: *EditorState) !void {
         if (self.cursor_byte >= self.buffer.items.len) return;
-        const end = nextCodepointEnd(self.buffer.items, self.cursor_byte);
+        const end = layout.nextDisplayUnitEnd(self.buffer.items, self.cursor_byte);
         try self.buffer.replaceRange(self.allocator, self.cursor_byte, end - self.cursor_byte, "");
         self.history_index = null;
     }
 
     fn moveLeft(self: *EditorState) void {
         if (self.cursor_byte == 0) return;
-        self.cursor_byte = previousCodepointStart(self.buffer.items, self.cursor_byte);
+        self.cursor_byte = layout.previousDisplayUnitStart(self.buffer.items, self.cursor_byte);
     }
 
     fn moveRight(self: *EditorState) void {
         if (self.cursor_byte >= self.buffer.items.len) return;
-        self.cursor_byte = nextCodepointEnd(self.buffer.items, self.cursor_byte);
+        self.cursor_byte = layout.nextDisplayUnitEnd(self.buffer.items, self.cursor_byte);
     }
 
     fn moveUpOrHistory(self: *EditorState) !void {
         const start = lineStart(self.buffer.items, self.cursor_byte);
         if (start > 0) {
-            const column = self.cursor_byte - start;
+            const column = layout.displayWidth(self.buffer.items[start..self.cursor_byte]);
             const previous_end = start - 1;
             const previous_start = lineStart(self.buffer.items, previous_end);
-            self.cursor_byte = @min(previous_start + column, previous_end);
+            self.cursor_byte = cursorAtDisplayColumn(self.buffer.items, previous_start, previous_end, column);
             return;
         }
         if (self.history.items.len == 0) return;
@@ -131,10 +132,10 @@ pub const EditorState = struct {
         const end = lineEnd(self.buffer.items, self.cursor_byte);
         if (end < self.buffer.items.len) {
             const start = lineStart(self.buffer.items, self.cursor_byte);
-            const column = self.cursor_byte - start;
+            const column = layout.displayWidth(self.buffer.items[start..self.cursor_byte]);
             const next_start = end + 1;
             const next_end = lineEnd(self.buffer.items, next_start);
-            self.cursor_byte = @min(next_start + column, next_end);
+            self.cursor_byte = cursorAtDisplayColumn(self.buffer.items, next_start, next_end, column);
             return;
         }
         if (self.history_index) |index| {
@@ -169,14 +170,6 @@ fn lineEnd(bytes: []const u8, cursor: usize) usize {
     return i;
 }
 
-fn previousCodepointStart(bytes: []const u8, cursor: usize) usize {
-    var i = cursor - 1;
-    while (i > 0 and (bytes[i] & 0xc0) == 0x80) i -= 1;
-    return i;
-}
-
-fn nextCodepointEnd(bytes: []const u8, cursor: usize) usize {
-    var i = cursor + 1;
-    while (i < bytes.len and (bytes[i] & 0xc0) == 0x80) i += 1;
-    return i;
+fn cursorAtDisplayColumn(bytes: []const u8, start: usize, end: usize, column: usize) usize {
+    return start + layout.displayUnitOffsetAtColumn(bytes[start..end], column);
 }

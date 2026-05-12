@@ -111,6 +111,7 @@ pub const InteractiveEventQueue = struct {
     }
 
     pub fn push(self: *InteractiveEventQueue, kind: InteractiveEventKind, text: []const u8, is_streaming: bool) !void {
+        if (try self.mergeIntoLast(kind, text, is_streaming)) return;
         if (self.events.items.len >= self.capacity) return error.QueueFull;
         var event = try QueuedInteractiveEvent.init(self.allocator, kind, text, is_streaming);
         errdefer event.deinit(self.allocator);
@@ -120,6 +121,20 @@ pub const InteractiveEventQueue = struct {
     pub fn popFront(self: *InteractiveEventQueue) ?QueuedInteractiveEvent {
         if (self.events.items.len == 0) return null;
         return self.events.orderedRemove(0);
+    }
+
+    fn mergeIntoLast(self: *InteractiveEventQueue, kind: InteractiveEventKind, text: []const u8, is_streaming: bool) !bool {
+        if (text.len == 0 or self.events.items.len == 0) return false;
+        const last = &self.events.items[self.events.items.len - 1];
+        if (last.kind != kind or last.is_streaming != is_streaming) return false;
+        switch (kind) {
+            .assistant, .thinking => {
+                if (!is_streaming) return false;
+                try last.text.appendSlice(self.allocator, text);
+                return true;
+            },
+            else => return false,
+        }
     }
 };
 
@@ -431,7 +446,6 @@ pub fn runLive(config: args.RunConfig, context: Context, io: std.Io, output: *st
 
     if (interactive_tty) {
         try output.writeAll(tui.terminal.interactive_enter_sequence);
-        session.cursor_hidden = true;
         try output.flush();
     }
     defer if (interactive_tty) {
@@ -448,6 +462,10 @@ pub fn runLive(config: args.RunConfig, context: Context, io: std.Io, output: *st
 
     var active_turn: ?*ActiveTurn = null;
     defer if (active_turn) |turn| turn.finish(&app);
+
+    var input_decoder = tui.input.StreamDecoder.init(context.allocator);
+    defer input_decoder.deinit();
+    var input_pending_elapsed_ms: u64 = 0;
 
     var input_buffer: [128]u8 = undefined;
     while (true) {
@@ -472,7 +490,14 @@ pub fn runLive(config: args.RunConfig, context: Context, io: std.Io, output: *st
             .revents = 0,
         }};
         const ready = try std.posix.poll(&poll_fds, poll_timeout);
-        if (ready == 0) continue;
+        if (ready == 0) {
+            if (poll_timeout > 0 and input_decoder.pending.items.len > 0) input_pending_elapsed_ms += @intCast(poll_timeout);
+            if (input_decoder.shouldFlushTimedOut(input_pending_elapsed_ms)) {
+                if (try flushLiveInputDecoder(&input_decoder, config, context, &app, &active_turn, &live_renderer, output)) |status| return status;
+                input_pending_elapsed_ms = 0;
+            }
+            continue;
+        }
         const has_input = (poll_fds[0].revents & std.posix.POLL.IN) != 0;
         if (!has_input and (poll_fds[0].revents & (std.posix.POLL.HUP | std.posix.POLL.ERR | std.posix.POLL.NVAL)) != 0) return .ok;
 
@@ -492,22 +517,36 @@ pub fn runLive(config: args.RunConfig, context: Context, io: std.Io, output: *st
             break :blk cooked_buffer[0..read_len];
         };
 
-        const events = try tui.input.decodeAll(context.allocator, bytes);
-        defer context.allocator.free(events);
-        for (events) |event| {
-            const status = try handleLiveInputEvent(config, context, &app, &active_turn, &live_renderer, event, output);
-            try output.flush();
-            switch (status) {
-                .continue_loop => {},
-                .exit_ok => return .ok,
-                .failure => return .failure,
-                .internal => return .internal,
-            }
-        }
+        try input_decoder.push(bytes);
+        input_pending_elapsed_ms = 0;
+        if (try handleLiveDecodedInput(&input_decoder, config, context, &app, &active_turn, &live_renderer, output, false)) |status| return status;
     }
 }
 
 const InputStatus = enum { continue_loop, exit_ok, failure, internal };
+
+fn flushLiveInputDecoder(input_decoder: *tui.input.StreamDecoder, config: args.RunConfig, context: Context, app: *InteractiveApp, active_turn: *?*ActiveTurn, renderer: *tui.render.TerminalRenderer, output: *std.Io.Writer) !?InteractiveStatus {
+    if (input_decoder.pending.items.len == 0) return null;
+    return try handleLiveDecodedInput(input_decoder, config, context, app, active_turn, renderer, output, true);
+}
+
+fn handleLiveDecodedInput(input_decoder: *tui.input.StreamDecoder, config: args.RunConfig, context: Context, app: *InteractiveApp, active_turn: *?*ActiveTurn, renderer: *tui.render.TerminalRenderer, output: *std.Io.Writer, flush_pending: bool) !?InteractiveStatus {
+    const decoded = if (flush_pending) try input_decoder.flushTimedOut() else try input_decoder.decodeAvailable();
+    defer context.allocator.free(decoded.events);
+    defer input_decoder.discard(decoded.consumed);
+
+    for (decoded.events) |event| {
+        const status = try handleLiveInputEvent(config, context, app, active_turn, renderer, event, output);
+        try output.flush();
+        switch (status) {
+            .continue_loop => {},
+            .exit_ok => return .ok,
+            .failure => return .failure,
+            .internal => return .internal,
+        }
+    }
+    return null;
+}
 
 fn handleLiveInputEvent(config: args.RunConfig, context: Context, app: *InteractiveApp, active_turn: *?*ActiveTurn, renderer: *tui.render.TerminalRenderer, event: tui.input.KeyEvent, output: *std.Io.Writer) !InputStatus {
     const result = try app.handleInput(event);

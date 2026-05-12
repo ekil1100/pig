@@ -17,6 +17,18 @@ test "layout treats wide characters conservatively" {
     try std.testing.expectEqual(@as(usize, 5), layout.displayWidth("中a中"));
 }
 
+test "layout treats combining marks and emoji width consistently" {
+    try std.testing.expectEqual(@as(usize, 1), layout.displayWidth("\t"));
+    try std.testing.expectEqual(@as(usize, 1), layout.displayWidth("e\u{301}"));
+    try std.testing.expectEqual(@as(usize, 2), layout.displayWidth("🙂"));
+    try std.testing.expectEqual(@as(usize, 2), layout.displayWidth("🚀"));
+    try std.testing.expectEqual(@as(usize, 2), layout.displayWidth("❤️"));
+    try std.testing.expectEqual(@as(usize, 2), layout.displayWidth("👩‍💻"));
+    try std.testing.expectEqual(@as(usize, 2), layout.displayWidth("🇺🇸"));
+    try std.testing.expectEqual(@as(usize, 2), layout.displayWidth("1️⃣"));
+    try std.testing.expectEqual(@as(usize, 3), layout.displayWidth("🙂‍a"));
+}
+
 test "components render cancellable loader and settings list" {
     const loader = try components.renderPlain(std.testing.allocator, components.cancellableLoader("running"));
     defer std.testing.allocator.free(loader);
