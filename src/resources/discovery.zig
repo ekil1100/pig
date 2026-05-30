@@ -41,25 +41,42 @@ pub const LoadOptions = struct {
 
 pub fn loadSnapshot(allocator: std.mem.Allocator, io: std.Io, options: LoadOptions) !ResourceSnapshot {
     var loaded_settings = try settings_mod.load(allocator, io, options.global_config, options.project_config, options.overrides);
-    defer loaded_settings.warnings.deinit(allocator);
-    errdefer loaded_settings.settings.deinit(allocator);
+    // Free both the backing buffer and any warning items that were never moved
+    // into the snapshot (e.g. if moveWarnings fails partway). On the success
+    // path every item has been moved out, so this loop frees nothing.
+    defer {
+        for (loaded_settings.warnings.items) |*warning| warning.deinit(allocator);
+        loaded_settings.warnings.deinit(allocator);
+    }
 
-    var registry = try models_mod.loadRegistry(allocator, io, options.global_models, options.project_models);
-    errdefer registry.deinit(allocator);
+    // Build the snapshot inside a labeled block so the per-component errdefers
+    // own each allocation only until it is moved into `snapshot`. Once the
+    // block yields, those errdefers leave scope (disarm) and `snapshot.deinit`
+    // becomes the single owner of settings/models/context. This avoids the
+    // double-free that armed per-component errdefers would otherwise cause
+    // after the values were copied by value into `snapshot`.
+    var snapshot = blk: {
+        var loaded_settings_settings = loaded_settings.settings;
+        errdefer loaded_settings_settings.deinit(allocator);
 
-    var context = try context_mod.load(allocator, io, .{
-        .cwd = options.cwd,
-        .include = loaded_settings.settings.context_include,
-        .max_bytes = loaded_settings.settings.context_max_bytes,
-    });
-    errdefer context.deinit(allocator);
+        var registry = try models_mod.loadRegistry(allocator, io, options.global_models, options.project_models);
+        errdefer registry.deinit(allocator);
 
-    var snapshot = ResourceSnapshot{
-        .settings = loaded_settings.settings,
-        .models = registry,
-        .context = context,
+        var context = try context_mod.load(allocator, io, .{
+            .cwd = options.cwd,
+            .include = loaded_settings_settings.context_include,
+            .max_bytes = loaded_settings_settings.context_max_bytes,
+        });
+        errdefer context.deinit(allocator);
+
+        break :blk ResourceSnapshot{
+            .settings = loaded_settings_settings,
+            .models = registry,
+            .context = context,
+        };
     };
     errdefer snapshot.deinit(allocator);
+
     try moveWarnings(allocator, &snapshot.warnings, &loaded_settings.warnings);
     try moveWarnings(allocator, &snapshot.warnings, &snapshot.models.warnings);
     try moveWarnings(allocator, &snapshot.warnings, &snapshot.context.warnings);

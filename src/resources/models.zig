@@ -111,6 +111,12 @@ const BuiltinEntry = struct {
 };
 
 fn addBuiltinEntry(allocator: std.mem.Allocator, registry: *Registry, builtin: BuiltinEntry) !void {
+    var entry = try cloneBuiltinEntry(allocator, builtin);
+    errdefer entry.deinit(allocator);
+    try registry.entries.append(allocator, entry);
+}
+
+fn cloneBuiltinEntry(allocator: std.mem.Allocator, builtin: BuiltinEntry) !ModelEntry {
     var source = try common.ResourceSourceInfo.clone(allocator, .builtin, "builtin", 0);
     errdefer source.deinit(allocator);
     const id = try allocator.dupe(u8, builtin.id);
@@ -123,7 +129,7 @@ fn addBuiltinEntry(allocator: std.mem.Allocator, registry: *Registry, builtin: B
     errdefer allocator.free(model);
     const base_url = try allocator.dupe(u8, builtin.base_url);
     errdefer allocator.free(base_url);
-    const entry = ModelEntry{
+    return .{
         .id = id,
         .provider_id = provider_id,
         .display_name = display_name,
@@ -133,11 +139,6 @@ fn addBuiltinEntry(allocator: std.mem.Allocator, registry: *Registry, builtin: B
         .scope = .builtin,
         .source = source,
     };
-    errdefer {
-        var mutable = entry;
-        mutable.deinit(allocator);
-    }
-    try registry.entries.append(allocator, entry);
 }
 
 fn applyFile(allocator: std.mem.Allocator, io: std.Io, registry: *Registry, path: []const u8, source: common.ResourceSource, scope: ModelScope, priority: u8) !void {

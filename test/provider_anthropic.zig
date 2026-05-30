@@ -58,6 +58,38 @@ test "anthropic parser preserves malformed tool arguments for tool layer" {
     try std.testing.expectEqualStrings("{\"path\":", collector.events.items[3].arguments_json.?);
 }
 
+test "anthropic message_delta emits stop_reason to sink" {
+    var collector = provider.testing.EventCollector.init(std.testing.allocator);
+    defer collector.deinit();
+
+    const bytes =
+        "event: message_start\n" ++
+        "data: {\"message\":{\"id\":\"msg_1\",\"role\":\"assistant\"}}\n\n" ++
+        "event: content_block_start\n" ++
+        "data: {\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"read_file\"}}\n\n" ++
+        "event: content_block_delta\n" ++
+        "data: {\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}\n\n" ++
+        "event: content_block_stop\n" ++
+        "data: {\"index\":0}\n\n" ++
+        "event: message_delta\n" ++
+        "data: {\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":7}}\n\n" ++
+        "event: message_stop\n" ++
+        "data: {}\n\n";
+
+    try provider.anthropic.parseBytes(std.testing.allocator, bytes, collector.sink());
+
+    var stop_reason: ?[]const u8 = null;
+    var saw_usage = false;
+    for (collector.events.items) |event| {
+        if (event.tag == .message_delta) stop_reason = event.stop_reason;
+        if (event.tag == .usage) saw_usage = true;
+    }
+
+    try std.testing.expect(stop_reason != null);
+    try std.testing.expectEqualStrings("tool_use", stop_reason.?);
+    try std.testing.expect(saw_usage);
+}
+
 test "anthropic parser rejects malformed stream sequences" {
     var missing_stop = provider.testing.EventCollector.init(std.testing.allocator);
     defer missing_stop.deinit();

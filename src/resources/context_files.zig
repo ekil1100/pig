@@ -97,8 +97,12 @@ fn appendContextFile(
         try common.appendWarning(allocator, &snapshot.warnings, .truncated, path, "context files exceeded max_bytes");
         return;
     }
-    try writer.writeAll(header);
-    try writer.writeAll(bytes);
+    // `writer` wraps a std.Io.Writer.Allocating whose only failure mode is the
+    // backing allocator running out of memory; surface that as error.OutOfMemory
+    // so callers (and checkAllAllocationFailures) see the real OOM rather than
+    // the writer's generic error.WriteFailed.
+    writer.writeAll(header) catch return error.OutOfMemory;
+    writer.writeAll(bytes) catch return error.OutOfMemory;
     used.* = projected;
     const owned_path = try allocator.dupe(u8, path);
     errdefer allocator.free(owned_path);
@@ -142,13 +146,20 @@ fn dirsFromRootToCwd(allocator: std.mem.Allocator, root: []const u8, cwd: []cons
         for (reversed.items) |item| allocator.free(item);
         reversed.deinit(allocator);
     }
-    var current = try allocator.dupe(u8, cwd);
-    while (true) {
+    // `pending` holds the freshly-duped path that has not yet been handed to
+    // `reversed`. It must be freed if `reversed.append` (or a later dupe) OOMs,
+    // since on failure the unmanaged ArrayList neither stores nor frees it. Once
+    // ownership transfers into `reversed`, clear it so the errdefer below does
+    // not double-free the slice the `reversed` errdefer already owns.
+    var pending: ?[]const u8 = try allocator.dupe(u8, cwd);
+    errdefer if (pending) |path| allocator.free(path);
+    while (pending) |current| {
         try reversed.append(allocator, current);
+        pending = null;
         if (std.mem.eql(u8, current, root)) break;
         const parent = std.fs.path.dirname(current) orelse break;
         if (std.mem.eql(u8, parent, current)) break;
-        current = try allocator.dupe(u8, parent);
+        pending = try allocator.dupe(u8, parent);
     }
     const dirs = try allocator.alloc([]const u8, reversed.items.len);
     for (reversed.items, 0..) |_, i| dirs[i] = reversed.items[reversed.items.len - 1 - i];

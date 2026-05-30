@@ -57,7 +57,14 @@ pub const SessionStore = struct {
             return error.InvalidRoot;
         }
 
-        const line = try entry_mod.writeLine(self.allocator, view);
+        // writeLine serializes through a std.Io.Writer.Allocating whose sole
+        // failure mode is the backing allocator; normalize its error.WriteFailed
+        // to error.OutOfMemory so OOM surfaces honestly to callers and to
+        // checkAllAllocationFailures.
+        const line = entry_mod.writeLine(self.allocator, view) catch |err| switch (err) {
+            error.WriteFailed => return error.OutOfMemory,
+            else => return err,
+        };
         defer self.allocator.free(line);
         var owned = try entry_mod.cloneFromView(self.allocator, view);
         errdefer owned.deinit(self.allocator);
@@ -110,7 +117,14 @@ pub fn create(allocator: std.mem.Allocator, io: std.Io, options: CreateOptions) 
         .created_ms = options.created_ms,
         .data = .{ .header = .{ .cwd = options.cwd, .pig_version = options.pig_version } },
     };
-    const line = try entry_mod.writeLine(allocator, header);
+    // writeLine serializes through a std.Io.Writer.Allocating whose sole failure
+    // mode is the backing allocator; normalize its error.WriteFailed to
+    // error.OutOfMemory so injected OOM surfaces as OutOfMemory (which
+    // checkAllAllocationFailures tolerates) instead of a spurious WriteFailed.
+    const line = entry_mod.writeLine(allocator, header) catch |err| switch (err) {
+        error.WriteFailed => return error.OutOfMemory,
+        else => return err,
+    };
     defer allocator.free(line);
     try file.writePositionalAll(io, line, 0);
     try file.writePositionalAll(io, "\n", line.len);
@@ -122,8 +136,10 @@ pub fn create(allocator: std.mem.Allocator, io: std.Io, options: CreateOptions) 
         entries.deinit(allocator);
     }
     var owned_header = try entry_mod.cloneFromView(allocator, header);
-    errdefer owned_header.deinit(allocator);
-    try entries.append(allocator, owned_header);
+    entries.append(allocator, owned_header) catch |e| {
+        owned_header.deinit(allocator);
+        return e;
+    };
     var tree = try tree_mod.rebuild(allocator, entries.items);
     errdefer tree.deinit();
 

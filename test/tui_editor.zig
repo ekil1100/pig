@@ -111,3 +111,19 @@ test "editor does not merge invalid zwj text into emoji unit" {
     _ = try state.handle(.{ .kind = .backspace }, false);
     try std.testing.expectEqualStrings("🙂‍", state.text());
 }
+
+fn submitWithAllocator(allocator: std.mem.Allocator) !void {
+    var state = editor.EditorState.init(allocator);
+    defer state.deinit();
+
+    try state.insert("remember this");
+    const result = try state.handle(.{ .kind = .enter }, false);
+    switch (result) {
+        .submit => |prompt| state.freeSubmitted(prompt),
+        else => return error.TestExpectedSubmit,
+    }
+}
+
+test "editor submit cleans up partial allocation failures" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, submitWithAllocator, .{});
+}

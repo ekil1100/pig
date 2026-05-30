@@ -74,7 +74,9 @@ pub const EditorState = struct {
         }
         const owned = try self.allocator.dupe(u8, self.buffer.items);
         errdefer self.allocator.free(owned);
-        try self.history.append(self.allocator, try self.allocator.dupe(u8, self.buffer.items));
+        const history_copy = try self.allocator.dupe(u8, self.buffer.items);
+        errdefer self.allocator.free(history_copy);
+        try self.history.append(self.allocator, history_copy);
         self.clearRetainingCapacity();
         return .{ .submit = owned };
     }

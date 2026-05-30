@@ -94,6 +94,10 @@ const ParserState = struct {
         } else if (std.mem.eql(u8, name, "content_block_stop")) {
             try self.stopBlock(root);
         } else if (std.mem.eql(u8, name, "message_delta")) {
+            if (objectGet(root, "delta")) |delta|
+                if (objectGet(delta, "stop_reason")) |sr|
+                    if (sr == .string)
+                        try self.sink.emit(.{ .message_delta = .{ .stop_reason = sr.string } });
             if (objectGet(root, "usage")) |usage| {
                 const current = usageFromValue(usage);
                 const combined = if (self.pending_usage) |pending| pending.add(current) else current;

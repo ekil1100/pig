@@ -91,3 +91,33 @@ test "context prompt places system and append system in stable sections" {
     try std.testing.expect(std.mem.indexOf(u8, prompt, "[System:") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "[Append System:") != null);
 }
+
+fn loadWithAllocator(allocator: std.mem.Allocator, cwd: []const u8) !void {
+    var snapshot = try pig.resources.context_files.load(allocator, std.testing.io, .{
+        .cwd = cwd,
+        .include = &.{"AGENTS.md"},
+        .max_bytes = 4096,
+    });
+    snapshot.deinit(allocator);
+}
+
+test "context discovery cleans up partial allocation failures while walking root to cwd" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(root);
+    // Place the workspace marker at the root and the cwd several levels below it
+    // so dirsFromRootToCwd's loop iterates more than once and dupes a fresh
+    // `current` on each later iteration, exercising the append/dupe OOM window.
+    const child = try std.fs.path.join(std.testing.allocator, &.{ root, "a", "b", "c" });
+    defer std.testing.allocator.free(child);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, child);
+    const pig_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".pig" });
+    defer std.testing.allocator.free(pig_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, pig_dir);
+    const child_agents = try std.fs.path.join(std.testing.allocator, &.{ child, "AGENTS.md" });
+    defer std.testing.allocator.free(child_agents);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = child_agents, .data = "child" });
+
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, loadWithAllocator, .{child});
+}

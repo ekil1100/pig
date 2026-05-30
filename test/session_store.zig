@@ -117,6 +117,28 @@ test "session store rejects appending another header before writing" {
     try std.testing.expect(std.mem.count(u8, bytes, "\"kind\":\"header\"") == 1);
 }
 
+fn createStoreWithAllocator(allocator: std.mem.Allocator, sessions_dir: []const u8) !void {
+    var created = try store.create(allocator, std.testing.io, .{
+        .sessions_dir = sessions_dir,
+        .session_id = "session_alloc_failure",
+        .cwd = sessions_dir,
+        .created_ms = 7,
+        .policy = .flush_only,
+    });
+    created.deinit();
+}
+
+test "session store create cleans up partial allocation failures" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(root);
+    const sessions_dir = try std.fs.path.join(std.testing.allocator, &.{ root, "sessions" });
+    defer std.testing.allocator.free(sessions_dir);
+
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, createStoreWithAllocator, .{sessions_dir});
+}
+
 test "session store rejects unsupported schema before writing" {
     var tmp = std.testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
