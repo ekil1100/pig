@@ -77,7 +77,9 @@ fn walkSorted(ctx: *context_mod.ToolContext, abs: []const u8, rel: []const u8, p
     }
     var it = dir.iterate();
     while (try it.next(ctx.io)) |entry| {
-        try entries.append(ctx.allocator, .{ .name = try ctx.allocator.dupe(u8, entry.name), .is_dir = entry.kind == .directory });
+        const name = try ctx.allocator.dupe(u8, entry.name);
+        errdefer ctx.allocator.free(name);
+        try entries.append(ctx.allocator, .{ .name = name, .is_dir = entry.kind == .directory });
     }
     std.mem.sort(Entry, entries.items, {}, struct {
         fn lessThan(_: void, a: Entry, b: Entry) bool {
@@ -93,7 +95,9 @@ fn walkSorted(ctx: *context_mod.ToolContext, abs: []const u8, rel: []const u8, p
 
         if (matchWildcard(pattern, entry.name)) {
             const suffix = if (entry.is_dir) "/" else "";
-            try matches.append(ctx.allocator, try std.fmt.allocPrint(ctx.allocator, "{s}{s}", .{ child_rel, suffix }));
+            const match = try std.fmt.allocPrint(ctx.allocator, "{s}{s}", .{ child_rel, suffix });
+            errdefer ctx.allocator.free(match);
+            try matches.append(ctx.allocator, match);
             if (matches.items.len >= collect_limit) return;
         }
         if (entry.is_dir) {

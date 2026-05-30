@@ -78,3 +78,46 @@ test "grep marks unreadably large files as truncated instead of silently complet
     defer result.deinit(std.testing.allocator);
     try expectContains(result.content_json, "\"truncated\":true");
 }
+
+fn lsExecuteWithAllocator(allocator: std.mem.Allocator) !void {
+    var tc = try tools.testing.TempToolContext.init(allocator);
+    defer tc.deinit();
+    try tc.writeFile("alpha.txt", "x\n");
+    try tc.writeFile("nested/beta.txt", "y\n");
+
+    var result = try tools.ls.execute(&tc.context, "{\"path\":\".\"}");
+    defer result.deinit(allocator);
+}
+
+test "ls cleans up partial allocation failures while listing entries" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, lsExecuteWithAllocator, .{});
+}
+
+fn findExecuteWithAllocator(allocator: std.mem.Allocator) !void {
+    var tc = try tools.testing.TempToolContext.init(allocator);
+    defer tc.deinit();
+    // A subdirectory forces walkSorted to recurse (exercising the entries append),
+    // and matching files in both levels exercise the matches append.
+    try tc.writeFile("top.txt", "x\n");
+    try tc.writeFile("sub/inner.txt", "y\n");
+
+    var result = try tools.find.execute(&tc.context, "{\"path\":\".\",\"pattern\":\"*.txt\"}");
+    defer result.deinit(allocator);
+}
+
+test "find cleans up partial allocation failures across both append sites" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, findExecuteWithAllocator, .{});
+}
+
+fn grepExecuteWithAllocator(allocator: std.mem.Allocator) !void {
+    var tc = try tools.testing.TempToolContext.init(allocator);
+    defer tc.deinit();
+    try tc.writeFile("hit.txt", "needle here\n");
+
+    var result = try tools.grep.execute(&tc.context, "{\"path\":\".\",\"pattern\":\"needle\"}");
+    defer result.deinit(allocator);
+}
+
+test "grep cleans up partial allocation failures while collecting matches" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, grepExecuteWithAllocator, .{});
+}

@@ -132,7 +132,11 @@ fn scanFile(ctx: *context_mod.ToolContext, rel: []const u8, abs: []const u8, pat
             truncated.* = true;
             return;
         }
-        try matches.append(ctx.allocator, .{ .path = try ctx.allocator.dupe(u8, rel), .line = line_no, .text = try ctx.allocator.dupe(u8, line) });
+        const path_copy = try ctx.allocator.dupe(u8, rel);
+        errdefer ctx.allocator.free(path_copy);
+        const text_copy = try ctx.allocator.dupe(u8, line);
+        errdefer ctx.allocator.free(text_copy);
+        try matches.append(ctx.allocator, .{ .path = path_copy, .line = line_no, .text = text_copy });
         result_bytes.* = projected_bytes;
     }
 }

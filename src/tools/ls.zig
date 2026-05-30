@@ -23,7 +23,9 @@ pub fn execute(ctx: *context_mod.ToolContext, args_json: []const u8) !context_mo
     var it = dir.iterate();
     while (try it.next(ctx.io)) |entry| {
         const suffix = if (entry.kind == .directory) "/" else "";
-        try names.append(ctx.allocator, try std.fmt.allocPrint(ctx.allocator, "{s}{s}", .{ entry.name, suffix }));
+        const name = try std.fmt.allocPrint(ctx.allocator, "{s}{s}", .{ entry.name, suffix });
+        errdefer ctx.allocator.free(name);
+        try names.append(ctx.allocator, name);
     }
     std.mem.sort([]u8, names.items, {}, struct {
         fn lessThan(_: void, a: []u8, b: []u8) bool {
