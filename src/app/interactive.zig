@@ -320,8 +320,6 @@ pub const InteractiveApp = struct {
     pub fn renderFrame(self: *InteractiveApp) !tui.render.Frame {
         var frame = tui.render.Frame.init(self.allocator, self.size);
         errdefer frame.deinit();
-        var input_lines: std.ArrayList([]const u8) = .empty;
-        defer freeOwnedLines(self.allocator, &input_lines);
 
         for (self.transcript.items) |*item| {
             try appendTranscriptItemLines(self.allocator, &frame.lines, item, self.size.width);
@@ -332,12 +330,12 @@ pub const InteractiveApp = struct {
         const input_row_start = frame.lines.items.len;
         const input_line = try std.fmt.allocPrint(self.allocator, "> {s}", .{self.editor.text()});
         defer self.allocator.free(input_line);
-        try appendWrappedLines(self.allocator, &input_lines, input_line, self.size.width);
+        // Append the wrapped input lines straight into frame.lines. Each line is
+        // already at most `width` columns, so wrapping is idempotent and there is
+        // no need to round-trip through frame.appendLine (which would re-wrap via
+        // the leak-prone tui.layout.wrapText).
+        try appendWrappedLines(self.allocator, &frame.lines, input_line, self.size.width);
         const input_cursor = try editorCursorPosition(self.allocator, &self.editor, self.size.width);
-
-        for (input_lines.items) |line| {
-            try frame.appendLine(line);
-        }
 
         const height = @max(@as(usize, self.size.height), 1);
         const tail_top = frame.lines.items.len -| height;
@@ -359,21 +357,55 @@ const EditorCursorPosition = struct {
 fn editorCursorPosition(allocator: std.mem.Allocator, editor: *const tui.editor.EditorState, width: u16) !EditorCursorPosition {
     const cursor_prefix = try std.fmt.allocPrint(allocator, "> {s}", .{editor.text()[0..editor.cursor_byte]});
     defer allocator.free(cursor_prefix);
-    const wrapped = try tui.layout.wrapText(allocator, cursor_prefix, width);
-    defer tui.layout.freeLines(allocator, wrapped);
-    const last_line = if (wrapped.len == 0) "" else wrapped[wrapped.len - 1];
+    var wrapped: std.ArrayList([]const u8) = .empty;
+    defer freeOwnedLines(allocator, &wrapped);
+    try appendWrappedLines(allocator, &wrapped, cursor_prefix, width);
+    const last_line = if (wrapped.items.len == 0) "" else wrapped.items[wrapped.items.len - 1];
     return .{
-        .row_offset = wrapped.len -| 1,
+        .row_offset = wrapped.items.len -| 1,
         .col = tui.layout.displayWidth(last_line),
     };
 }
 
-fn appendWrappedLines(allocator: std.mem.Allocator, lines: *std.ArrayList([]const u8), text: []const u8, width: u16) !void {
-    const wrapped = try tui.layout.wrapText(allocator, text, width);
-    defer tui.layout.freeLines(allocator, wrapped);
-    for (wrapped) |line| {
-        try lines.append(allocator, try allocator.dupe(u8, line));
+// Wrap `text` to `width` display columns and append each resulting line, as an
+// owned dup, into `lines`. This mirrors tui.layout.wrapText's wrapping rules but
+// streams the duped lines straight into the destination list. We deliberately do
+// not route through tui.layout.wrapText here: that helper appends each line via
+// `lines.append(allocator, try allocator.dupe(...))`, so an OOM growing its
+// internal list leaks the already-duped line (the dup is evaluated before the
+// failing append, and the failed append never stores it). Building the dup in a
+// local first and only then appending keeps every line freed on the OOM path.
+fn appendWrappedLines(allocator: std.mem.Allocator, lines: *std.ArrayList([]const u8), text: []const u8, raw_width: u16) !void {
+    const width = @max(@as(usize, raw_width), 1);
+    var start: usize = 0;
+    var i: usize = 0;
+    var current_width: usize = 0;
+    while (i < text.len) {
+        if (text[i] == '\n') {
+            try appendOwnedLine(allocator, lines, text[start..i]);
+            i += 1;
+            start = i;
+            current_width = 0;
+            continue;
+        }
+        const unit_end = tui.layout.nextDisplayUnitEnd(text, i);
+        const char_width = tui.layout.displayWidth(text[i..unit_end]);
+        if (current_width > 0 and current_width + char_width > width) {
+            try appendOwnedLine(allocator, lines, text[start..i]);
+            start = i;
+            current_width = 0;
+            continue;
+        }
+        current_width += char_width;
+        i = unit_end;
     }
+    try appendOwnedLine(allocator, lines, text[start..]);
+}
+
+fn appendOwnedLine(allocator: std.mem.Allocator, lines: *std.ArrayList([]const u8), line: []const u8) !void {
+    const copy = try allocator.dupe(u8, line);
+    errdefer allocator.free(copy);
+    try lines.append(allocator, copy);
 }
 
 fn freeOwnedLines(allocator: std.mem.Allocator, lines: *std.ArrayList([]const u8)) void {
@@ -590,12 +622,17 @@ fn handleLiveInputEvent(config: args.RunConfig, context: Context, app: *Interact
                 return if (context.recover_missing_model) .continue_loop else .failure;
             };
             active_turn.* = try ActiveTurn.start(config, context, app, model, model_prompt.text);
-            try renderLiveApp(renderer, app, output);
+            // ActiveTurn.start adopts the prompt slice by value (turn.prompt = the
+            // slice; no dupe). Hand ownership to the turn BEFORE any further fallible
+            // call: if renderLiveApp below fails, the surrounding defers (prompt_owned
+            // and model_prompt.deinit) must NOT free a buffer that the turn now owns
+            // and will free in finish(), or we double-free the same pointer.
             if (model_prompt.owned) {
                 model_prompt.owned = false;
             } else {
                 prompt_owned = false;
             }
+            try renderLiveApp(renderer, app, output);
         },
     }
     return .continue_loop;

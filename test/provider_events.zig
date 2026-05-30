@@ -28,3 +28,16 @@ test "event collector clones metadata and supports message_delta" {
     try std.testing.expectEqualStrings("stop", collector.events.items[0].stop_reason.?);
     try std.testing.expectEqualStrings("{\"x\":1}", collector.events.items[0].metadata_json.?);
 }
+
+fn collectMultiFieldEventsWithAllocator(allocator: std.mem.Allocator) !void {
+    var collector = provider.testing.EventCollector.init(allocator);
+    defer collector.deinit();
+    const sink = collector.sink();
+    // Arms that dupe multiple fields exercise the intra-arm and final-append leak paths.
+    try sink.emit(.{ .thinking_delta = .{ .text = "reasoning", .signature_delta = "sig" } });
+    try sink.emit(.{ .tool_call_end = .{ .index = 0, .id = "call_1", .name = "edit", .arguments_json = "{\"path\":\"README.md\"}" } });
+}
+
+test "event collector cleans up partial allocation failures" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, collectMultiFieldEventsWithAllocator, .{});
+}

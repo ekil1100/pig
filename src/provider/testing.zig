@@ -53,21 +53,59 @@ pub const EventCollector = struct {
     }
 
     fn append(self: *EventCollector, event: events.ProviderEvent) !void {
-        const collected: CollectedEvent = switch (event) {
-            .message_start => |v| .{ .tag = .message_start, .role = v.role, .id = try self.dupeOpt(v.provider_message_id) },
-            .message_delta => |v| .{ .tag = .message_delta, .stop_reason = try self.dupeOpt(v.stop_reason), .metadata_json = try self.dupeOpt(v.metadata_json) },
-            .message_end => .{ .tag = .message_end },
-            .text_delta => |v| .{ .tag = .text_delta, .text = try self.allocator.dupe(u8, v.text) },
-            .thinking_delta => |v| .{ .tag = .thinking_delta, .text = try self.allocator.dupe(u8, v.text), .metadata_json = try self.dupeOpt(v.signature_delta) },
-            .tool_call_start => |v| .{ .tag = .tool_call_start, .id = try self.dupeOpt(v.id), .name = try self.dupeOpt(v.name) },
-            .tool_call_delta => |v| .{ .tag = .tool_call_delta, .arguments_json_delta = try self.allocator.dupe(u8, v.arguments_json_delta) },
-            .tool_call_end => |v| .{ .tag = .tool_call_end, .id = try self.allocator.dupe(u8, v.id), .name = try self.allocator.dupe(u8, v.name), .arguments_json = try self.allocator.dupe(u8, v.arguments_json) },
-            .usage => |v| .{ .tag = .usage, .usage = v },
-            .cost => .{ .tag = .cost },
-            .error_event => |v| .{ .tag = .error_event, .error_kind = v.category, .error_message = try self.allocator.dupe(u8, v.message) },
-            .done => .{ .tag = .done },
-        };
+        var collected = CollectedEvent{ .tag = tagOf(event) };
+        errdefer collected.deinit(self.allocator);
+        switch (event) {
+            .message_start => |v| {
+                collected.role = v.role;
+                collected.id = try self.dupeOpt(v.provider_message_id);
+            },
+            .message_delta => |v| {
+                collected.stop_reason = try self.dupeOpt(v.stop_reason);
+                collected.metadata_json = try self.dupeOpt(v.metadata_json);
+            },
+            .message_end => {},
+            .text_delta => |v| collected.text = try self.allocator.dupe(u8, v.text),
+            .thinking_delta => |v| {
+                collected.text = try self.allocator.dupe(u8, v.text);
+                collected.metadata_json = try self.dupeOpt(v.signature_delta);
+            },
+            .tool_call_start => |v| {
+                collected.id = try self.dupeOpt(v.id);
+                collected.name = try self.dupeOpt(v.name);
+            },
+            .tool_call_delta => |v| collected.arguments_json_delta = try self.allocator.dupe(u8, v.arguments_json_delta),
+            .tool_call_end => |v| {
+                collected.id = try self.allocator.dupe(u8, v.id);
+                collected.name = try self.allocator.dupe(u8, v.name);
+                collected.arguments_json = try self.allocator.dupe(u8, v.arguments_json);
+            },
+            .usage => |v| collected.usage = v,
+            .cost => {},
+            .error_event => |v| {
+                collected.error_kind = v.category;
+                collected.error_message = try self.allocator.dupe(u8, v.message);
+            },
+            .done => {},
+        }
         try self.events.append(self.allocator, collected);
+    }
+
+    fn tagOf(event: events.ProviderEvent) events.ProviderEventTag {
+        return switch (event) {
+            .message_start => .message_start,
+            .message_delta => .message_delta,
+            .message_end => .message_end,
+            .text_delta => .text_delta,
+            .thinking_delta => .thinking_delta,
+            .tool_call_start => .tool_call_start,
+            .tool_call_delta => .tool_call_delta,
+            .tool_call_end => .tool_call_end,
+            .usage => .usage,
+            .cost => .cost,
+            .error_event => .error_event,
+            .done => .done,
+        };
     }
 
     fn onEvent(ptr: *anyopaque, event: events.ProviderEvent) events.EventSinkError!void {

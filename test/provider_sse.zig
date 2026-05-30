@@ -43,3 +43,14 @@ test "sse parser ignores event name without data" {
 
     try std.testing.expectEqual(@as(usize, 0), collector.events.items.len);
 }
+
+fn collectSseEventWithAllocator(allocator: std.mem.Allocator) !void {
+    var collector = provider.sse.EventCollector.init(allocator);
+    defer collector.deinit();
+    // Drive onEvent with an event that has BOTH name and data set so both dupes run.
+    try collector.sink().emit(.{ .event = "message", .data = "hello world" });
+}
+
+test "sse event collector cleans up partial allocation failures" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, collectSseEventWithAllocator, .{});
+}

@@ -586,3 +586,85 @@ test "interactive tool formatting is semantic" {
     defer std.testing.allocator.free(reason);
     try std.testing.expectEqualStrings("approval denied", reason);
 }
+
+// Finding #4 (Pattern B leak in appendWrappedLines): renderFrame wraps each
+// transcript item with appendWrappedLines, which dupes every wrapped line and
+// appends it to an ArrayList. On the un-fixed code the dup was passed inline as
+// the append argument, so an OOM growing the list leaked the duped line. A narrow
+// terminal forces the assistant text to wrap into many lines, guaranteeing both a
+// successful dup and a later failing append at some injected allocation index.
+fn appendTranscriptWith(app: *pig.app.interactive.InteractiveApp, allocator: std.mem.Allocator, kind: pig.app.interactive.InteractiveEventKind, text: []const u8) !void {
+    var item_text: std.ArrayList(u8) = .empty;
+    errdefer item_text.deinit(allocator);
+    try item_text.appendSlice(allocator, text);
+    // append is the last fallible statement: once it succeeds the transcript owns
+    // item_text and app.deinit frees it, so the errdefer above never double-frees.
+    try app.transcript.append(allocator, .{ .kind = kind, .text = item_text, .is_streaming = false });
+}
+
+fn renderWrappedTranscriptWithAllocator(allocator: std.mem.Allocator) !void {
+    var app = pig.app.interactive.InteractiveApp.init(allocator, .{ .width = 16, .height = 6 }, .{});
+    defer app.deinit();
+
+    try appendTranscriptWith(&app, allocator, .assistant, "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima");
+
+    var frame = try app.renderFrame();
+    frame.deinit();
+}
+
+test "interactive render cleans up wrapped transcript lines on allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, renderWrappedTranscriptWithAllocator, .{});
+}
+
+// Finding #2 (Pattern B leak of workspace_root in runtime.runWithSink): the print
+// path enables builtin tools, which allocates workspace_root and then calls
+// initBuiltinToolSet. On the un-fixed code workspace_root's only guard was a nested
+// errdefer that disarmed when control left its `if` block, so an OOM inside
+// initBuiltinToolSet leaked workspace_root. Driving the real --print entry point
+// with tools enabled and a tmp workspace exercises that exact allocation order.
+//
+// Allocations inside runUserText are swallowed by runWithSink into .internal (and
+// config resolution may surface .failure); to keep checkAllAllocationFailures from
+// reporting those swallows as SwallowedOutOfMemoryError we surface any non-ok exit
+// as OutOfMemory. The leak under test is hit at an initBuiltinToolSet allocation
+// index, which propagates OutOfMemory as a real error *before* runUserText runs, so
+// the leak is detected regardless of that mapping.
+// The model is rebuilt inside the wrapper so every checkAllAllocationFailures
+// invocation starts from a fresh turn cursor and exercises an identical allocation
+// profile (ScriptedModelClient.index/request_count are stateful across calls).
+fn runPrintWithToolsAllocator(allocator: std.mem.Allocator, cwd: []const u8) !void {
+    const turn = [_]provider.ProviderEvent{
+        .{ .message_start = .{ .role = .assistant } },
+        .{ .text_delta = .{ .text = "ok" } },
+        .message_end,
+        .done,
+    };
+    const turns = [_][]const provider.ProviderEvent{&turn};
+    var model = agent.model_client.ScriptedModelClient{ .turns = &turns };
+
+    var stdout: std.Io.Writer.Allocating = .init(allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(allocator);
+    defer stderr.deinit();
+
+    const code = try cli.runWithContext(&.{ "--print", "hello", "--ephemeral", "--cwd", cwd }, .{
+        .allocator = allocator,
+        .io = std.testing.io,
+        .model_client = model.client(),
+    }, &stdout.writer, &stderr.writer);
+    if (code != .ok) return error.OutOfMemory;
+}
+
+test "print runtime cleans up workspace root when tool setup fails to allocate" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(root);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, root);
+    const cwd = try pig.util.paths.cwd(std.testing.allocator, std.testing.io);
+    defer std.testing.allocator.free(cwd);
+    const root_absolute = try std.fs.path.join(std.testing.allocator, &.{ cwd, root });
+    defer std.testing.allocator.free(root_absolute);
+
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, runPrintWithToolsAllocator, .{root_absolute});
+}

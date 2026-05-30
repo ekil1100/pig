@@ -42,6 +42,12 @@ pub fn runPrint(config: args.RunConfig, context: RuntimeContext, stdout: *std.Io
             .env_home = context.env_home,
             .config = config,
         }) catch |err| {
+            // Out-of-memory is reported as an internal failure without writing a
+            // diagnostic: emitting one needs to allocate (the writers buffer into
+            // an allocating sink in tests), so under OOM the write itself fails and
+            // would escape as error.WriteFailed instead of a clean exit status.
+            // This matches the OOM handling in runWithSink/openSession below.
+            if (err == error.OutOfMemory) return .internal;
             try writeConfigError(config.output, stdout, stderr, err);
             return .failure;
         };
@@ -112,16 +118,25 @@ fn runWithSink(config: args.RunConfig, context: RuntimeContext, model: agent.Mod
     var allow_approval = tools.approval.AllowAllApproval{};
     var tool_context: tools.ToolContext = undefined;
     var store: ?session.store.SessionStore = null;
+    // Register the owning cleanup up front so workspace_root/spill_dir stay guarded
+    // across the fallible initBuiltinToolSet call below. The nested errdefers used
+    // before disarmed when control left their `if` block, leaking workspace_root if
+    // initBuiltinToolSet returned error.OutOfMemory. Each field is freed exactly once
+    // here (all start null and are set at most once).
+    defer {
+        if (store) |*session_store| session_store.deinit();
+        if (builtin_set) |*set| set.deinit(context.allocator);
+        if (spill_dir) |path| context.allocator.free(path);
+        if (workspace_root) |path| context.allocator.free(path);
+    }
 
     if (config.tools_enabled or shouldPersistSession(config, context)) {
         workspace_root = try resolveWorkspaceRoot(context.allocator, context.io, config.cwd);
-        errdefer if (workspace_root) |path| context.allocator.free(path);
     }
 
     if (config.tools_enabled) {
         const io = context.io orelse return .internal;
         spill_dir = try std.fs.path.join(context.allocator, &.{ workspace_root.?, ".pig-spill" });
-        errdefer if (spill_dir) |path| context.allocator.free(path);
         tool_context = .{
             .allocator = context.allocator,
             .io = io,
@@ -131,12 +146,6 @@ fn runWithSink(config: args.RunConfig, context: RuntimeContext, model: agent.Mod
         };
         builtin_set = try tools.registry.initBuiltinToolSet(context.allocator, &tool_context, .{ .include_p1 = config.include_p1_tools });
         tool_registry = .{ .registrations = builtin_set.?.registrations };
-    }
-    defer {
-        if (store) |*session_store| session_store.deinit();
-        if (builtin_set) |*set| set.deinit(context.allocator);
-        if (spill_dir) |path| context.allocator.free(path);
-        if (workspace_root) |path| context.allocator.free(path);
     }
 
     if (shouldPersistSession(config, context)) {

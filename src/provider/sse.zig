@@ -114,10 +114,10 @@ pub const EventCollector = struct {
 
     fn onEvent(ptr: *anyopaque, event: SseEvent) EventSinkError!void {
         const self: *EventCollector = @ptrCast(@alignCast(ptr));
-        const owned = CollectedSseEvent{
-            .event = if (event.event) |name| self.allocator.dupe(u8, name) catch return error.OutOfMemory else null,
-            .data = self.allocator.dupe(u8, event.data) catch return error.OutOfMemory,
-        };
-        self.events.append(self.allocator, owned) catch return error.OutOfMemory;
+        const name_copy: ?[]const u8 = if (event.event) |name| (self.allocator.dupe(u8, name) catch return error.OutOfMemory) else null;
+        errdefer if (name_copy) |n| self.allocator.free(n);
+        const data_copy = self.allocator.dupe(u8, event.data) catch return error.OutOfMemory;
+        errdefer self.allocator.free(data_copy);
+        self.events.append(self.allocator, .{ .event = name_copy, .data = data_copy }) catch return error.OutOfMemory;
     }
 };
