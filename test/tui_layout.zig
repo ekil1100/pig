@@ -13,6 +13,15 @@ test "layout wraps text and handles narrow widths" {
     try std.testing.expectEqualStrings("ef", lines[2]);
 }
 
+fn wrapTextWithAllocator(allocator: std.mem.Allocator) !void {
+    const lines = try layout.wrapText(allocator, "alpha\nbravo charlie delta echo foxtrot", 4);
+    layout.freeLines(allocator, lines);
+}
+
+test "layout wrapText cleans up partial allocation failures" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, wrapTextWithAllocator, .{});
+}
+
 test "layout treats wide characters conservatively" {
     try std.testing.expectEqual(@as(usize, 5), layout.displayWidth("中a中"));
 }

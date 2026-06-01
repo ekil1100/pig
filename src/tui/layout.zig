@@ -96,7 +96,9 @@ pub fn freeLines(allocator: std.mem.Allocator, lines: [][]const u8) void {
 }
 
 fn appendLine(allocator: std.mem.Allocator, lines: *std.ArrayList([]const u8), line: []const u8) !void {
-    try lines.append(allocator, try allocator.dupe(u8, line));
+    const copy = try allocator.dupe(u8, line);
+    errdefer allocator.free(copy);
+    try lines.append(allocator, copy);
 }
 
 const DecodedCodepoint = struct {
